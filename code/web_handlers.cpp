@@ -4,6 +4,7 @@
 #include "modem.h"
 #include "push.h"
 #include "wifi_config.h"
+#include "esim.h"
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -1114,6 +1115,13 @@ void handleWifi() {
 // eSIM Management
 void handleESim() {
   if (!checkAuth()) return;
+
+  static bool busy = false;
+  if (busy) {
+    server.send(429, "application/json", "{\"success\":false,\"message\":\"eSIM 正忙，请稍后重试\"}");
+    return;
+  }
+  busy = true;
   
   String action = server.arg("action");
   String json = "{";
@@ -1125,7 +1133,7 @@ void handleESim() {
   if (action == "info") {
     logCaptureLn(String("网页端查询eSIM信息..."));
     
-    char eid[32];
+    char eid[40];
     if (esimGetEID(eid, sizeof(eid))) {
       success = true;
       message += "<tr><td>EID</td><td>" + String(eid) + "</td></tr>";
@@ -1154,12 +1162,12 @@ void handleESim() {
       for (int i = 0; i < count; i++) {
         if (i > 0) profiles += ",";
         profiles += "{";
-        profiles += "\"iccid\":\"" + String(profileList[i].iccid) + "\",";
-        profiles += "\"nickname\":\"" + String(profileList[i].nickname) + "\",";
+        profiles += "\"iccid\":\"" + jsonEscape(String(profileList[i].iccid)) + "\",";
+        profiles += "\"nickname\":\"" + jsonEscape(String(profileList[i].nickname)) + "\",";
         profiles += "\"state\":" + String(profileList[i].state) + ",";
         profiles += "\"profileClass\":" + String(profileList[i].profileClass) + ",";
-        profiles += "\"serviceProviderName\":\"" + String(profileList[i].serviceProviderName) + "\",";
-        profiles += "\"profileName\":\"" + String(profileList[i].profileName) + "\"";
+        profiles += "\"serviceProviderName\":\"" + jsonEscape(String(profileList[i].serviceProviderName)) + "\",";
+        profiles += "\"profileName\":\"" + jsonEscape(String(profileList[i].profileName)) + "\"";
         profiles += "}";
       }
       profiles += "]";
@@ -1175,6 +1183,17 @@ void handleESim() {
     if (esimEnableProfile(iccid.c_str())) {
       success = true;
       message = "eSIM配置已启用: " + iccid;
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "switch") {
+    String iccid = server.arg("iccid");
+    logCaptureLn(String("网页端切换eSIM配置: ") + iccid);
+
+    if (esimSwitchProfile(iccid.c_str())) {
+      success = true;
+      message = "eSIM配置已切换: " + iccid;
     } else {
       message = esimGetLastError();
     }
@@ -1230,4 +1249,5 @@ void handleESim() {
   json += "}";
   
   server.send(200, "application/json", json);
+  busy = false;
 }

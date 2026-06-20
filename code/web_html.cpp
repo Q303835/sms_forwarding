@@ -628,7 +628,7 @@ const char* htmlPage = R"rawliteral(
                 if(p.state==1){
                   html+='<button class="btn btn-danger btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',false)">禁用</button>';
                 } else {
-                  html+='<button class="btn btn-primary btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',true)">启用</button>';
+                  html+='<button class="btn btn-primary btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',true)">切换/启用</button>';
                   html+=' <button class="btn btn-danger btn-sm" onclick="esimDelete(\''+p.iccid+'\')">删除</button>';
                 }
                 html+='</td></tr>';
@@ -651,7 +651,7 @@ const char* htmlPage = R"rawliteral(
 
     function esimEnableDisable(iccid, enable){
       if(!confirm(enable?'确定要启用此eSIM配置吗？':'确定要禁用此eSIM配置吗？'))return;
-      var action=enable?'enable':'disable';
+      var action=enable?'switch':'disable';
       fetch('/esim?action='+action+'&iccid='+encodeURIComponent(iccid)).then(function(rr){return rr.json()}).then(function(d){
         if(d.success){
           alert(d.message);

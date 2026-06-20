@@ -106,7 +106,7 @@ void setup() {
   logCaptureLn(String("初始化eSIM..."));
   if (esimInit()) {
     logCaptureLn(String("eSIM初始化成功"));
-    char eid[32];
+    char eid[40];
     if (esimGetEID(eid, sizeof(eid))) {
       logCapture(String("EID: "));
       logCaptureLn(eid);
@@ -128,6 +128,6 @@ void loop() {
     }
   }
   checkConcatTimeout();
-  if (Serial.available()) Serial1.write(Serial.read());
+  handleSerialConsole();
   checkSerial1URC();
 }
