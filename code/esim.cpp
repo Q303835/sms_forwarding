@@ -293,8 +293,8 @@ static String compactAtResponse(const String& resp) {
   out.replace("\n", " ");
   out.trim();
   while (out.indexOf("  ") >= 0) out.replace("  ", " ");
-  if (out.length() > 220) {
-    out = out.substring(0, 220) + "...";
+  if (out.length() > 360) {
+    out = out.substring(0, 360) + "...";
   }
   return out;
 }
@@ -355,6 +355,66 @@ static bool parseAtPayload(const String& resp, const char* prefix, String* paylo
   return payload->length() > 0;
 }
 
+static bool parseCGLAHexPayload(const String& resp, String* hex) {
+  int idx = resp.indexOf("+CGLA:");
+  if (idx >= 0) {
+    int pos = idx + 6;
+    while (pos < resp.length() && isspace((unsigned char)resp.charAt(pos))) pos++;
+
+    int expectedChars = 0;
+    while (pos < resp.length() && isdigit((unsigned char)resp.charAt(pos))) {
+      expectedChars = expectedChars * 10 + (resp.charAt(pos) - '0');
+      pos++;
+    }
+
+    int comma = resp.indexOf(',', pos);
+    if (comma >= 0) {
+      pos = comma + 1;
+      while (pos < resp.length() && isspace((unsigned char)resp.charAt(pos))) pos++;
+      if (pos < resp.length() && resp.charAt(pos) == '"') pos++;
+
+      String collected;
+      if (expectedChars > 0) collected.reserve(expectedChars);
+      for (; pos < resp.length(); pos++) {
+        char c = resp.charAt(pos);
+        if (isHexChar(c)) {
+          collected += c;
+          if (expectedChars > 0 && collected.length() >= expectedChars) break;
+        } else if (c == '"' && expectedChars == 0) {
+          break;
+        }
+      }
+
+      if (collected.length() > 0) {
+        if (expectedChars > 0 && collected.length() != expectedChars) {
+          logCaptureLn(String("eSIM CGLA 长度字段不匹配: 期望=") + String(expectedChars) +
+                       ", 实际=" + String(collected.length()));
+        }
+        *hex = collected;
+        return true;
+      }
+    }
+  }
+
+  String payload;
+  if (!parseAtPayload(resp, "+CGLA:", &payload)) {
+    String extracted;
+    if (extractLongestHexRun(resp, &extracted)) {
+      *hex = extracted;
+      return true;
+    }
+    return false;
+  }
+  int comma = payload.indexOf(',');
+  *hex = comma >= 0 ? payload.substring(comma + 1) : payload;
+  hex->trim();
+  if (hex->length() >= 2 && hex->charAt(0) == '"' && hex->charAt(hex->length() - 1) == '"') {
+    *hex = hex->substring(1, hex->length() - 1);
+  }
+  hex->trim();
+  return hex->length() > 0;
+}
+
 static bool openChannel(String* channel) {
   String aidHex = bytesToHex(ESIM_ISD_R_AID, sizeof(ESIM_ISD_R_AID));
   logCaptureLn(String("eSIM CCHO TX: 打开 ISD-R 通道"));
@@ -410,19 +470,11 @@ static bool transmitApdu(const String& channel, const uint8_t* tx, size_t txLen,
   logCaptureLn(String("eSIM CGLA TX: channel=") + channel + ", bytes=" + String(txLen));
   String resp = sendESimATCommand(cmd.c_str(), 30000);
   logCaptureLn(String("eSIM CGLA RX: ") + compactAtResponse(resp));
-  String payload;
-  if (!parseAtPayload(resp, "+CGLA:", &payload)) {
+  String hex;
+  if (!parseCGLAHexPayload(resp, &hex)) {
     setError(String("APDU 传输失败，无法解析响应: ") + compactAtResponse(resp));
     return false;
   }
-
-  int comma = payload.indexOf(',');
-  String hex = comma >= 0 ? payload.substring(comma + 1) : payload;
-  hex.trim();
-  if (hex.length() >= 2 && hex.charAt(0) == '"' && hex.charAt(hex.length() - 1) == '"') {
-    hex = hex.substring(1, hex.length() - 1);
-  }
-  hex.trim();
 
   if (!isHexString(hex)) {
     String extracted;
