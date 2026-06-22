@@ -1,6 +1,6 @@
 # 低成本短信转发器
 
-> 本项目修改自linuxdo大佬的[项目](https://github.com/chenxuuu/sms_forwarding
+> 本项目修改自linuxdo大佬的[项目](https://github.com/chenxuuu/sms_forwarding)
 
 本项目仅用于接收短信与进行保号相关功能。  
 多卡控制、通话、拨号、开放接口、eSIM卡管理等功能永远不会支持，请勿提出相关需求。
