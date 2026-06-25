@@ -34,6 +34,8 @@ struct PushChannel {
 
 // 配置参数结构体
 struct Config {
+  String wifiSsid;
+  String wifiPass;
   String smtpServer;
   int smtpPort;
   String smtpUser;

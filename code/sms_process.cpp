@@ -138,13 +138,11 @@ String readSerialLine(HardwareSerial& port) {
       if (linePos < SERIAL_BUFFER_SIZE - 1)
         lineBuf[linePos++] = c;
       else
-        linePos = 0;  //超长报错保护，重头计
+        linePos = 0;
     }
   }
   return "";
 }
-
-// 检查字符串是否为有效的十六进制PDU数据
 bool isHexString(const String& str) {
   if (str.length() == 0) return false;
   for (unsigned int i = 0; i < str.length(); i++) {
@@ -209,8 +207,6 @@ void processAdminCommand(const char* sender, const char* text) {
   cmd.trim();
   
   logCaptureLn(String("处理管理员命令: " + cmd));
-  
-  // 处理 SMS:号码:内容 命令
   if (cmd.startsWith("SMS:")) {
     int firstColon = cmd.indexOf(':');
     int secondColon = cmd.indexOf(':', firstColon + 1);
@@ -284,16 +280,57 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
     // 检查是否为命令格式
     if (smsText.startsWith("SMS:") || smsText.equals("RESET")) {
       processAdminCommand(sender, text);
-      // 命令已处理，不再发送普通通知邮件
       return;
     }
   }
+  String cleanPhone = localPhoneNumber;
+  if (cleanPhone.length() == 0 || cleanPhone == "未知号码") {
+    cleanPhone = "未知号码";
+  }
+  String codeTip = "";
+  String smsStr = String(text);
+  int numCount = 0;
+  int startIdx = -1;
 
-  // 发送通知http（推送到所有启用的通道）
-  sendSMSToServer(sender, text, timestamp);
-  // 发送通知邮件
-  String subject = ""; subject+="短信";subject+=sender;subject+=",";subject+=text;
-  String body = ""; body+="来自：";body+=sender;body+="，时间：";body+=timestamp;body+="，内容：";body+=text;
+  for (unsigned int i = 0; i <= smsStr.length(); i++) {
+    char c = (i < smsStr.length()) ? smsStr.charAt(i) : ' '; 
+    if (c >= '0' && c <= '9') {
+      if (numCount == 0) startIdx = i;
+      numCount++;
+    } else {
+      if (numCount >= 4 && numCount <= 6) {
+        String potentialCode = smsStr.substring(startIdx, startIdx + numCount);
+        codeTip = "【验证码:" + potentialCode + "】";
+        break; 
+      }
+      numCount = 0;
+    }
+  }
+
+  String formattedTime = "";
+  String rawTime = String(timestamp);
+  rawTime.trim();
+  if (rawTime.length() >= 12) {
+    formattedTime = "20" + rawTime.substring(0, 2) + "-" + 
+                    rawTime.substring(2, 4) + "-" + 
+                    rawTime.substring(4, 6) + " " + 
+                    rawTime.substring(6, 8) + ":" + 
+                    rawTime.substring(8, 10) + ":" + 
+                    rawTime.substring(10, 12);
+  } else {
+    formattedTime = rawTime;
+  }
+  String combinedText = codeTip + String(text);
+  combinedText += "\n\n---\n";
+  combinedText += "【接收手机】: " + cleanPhone + "\n";
+  combinedText += "【接收时间】: " + formattedTime;
+  sendSMSToServer(sender, combinedText.c_str(), timestamp);
+  String subject = codeTip + String(text) + " [" + cleanPhone + "]";
+  String body = "来自：" + String(sender) + "\n";
+  body += "内容：" + String(text) + "\n\n";
+  body += "---\n";
+  body += "本机号码：" + cleanPhone + "\n";
+  body += "接收时间：" + formattedTime;
   sendEmailNotification(subject.c_str(), body.c_str());
 }
 

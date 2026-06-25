@@ -196,6 +196,7 @@ const char* htmlPage = R"rawliteral(
       <div class="sidebar-section-label">配置</div>
       <a data-panel="overview" class="active"><span class="ico">🏠</span> <span>系统概览</span></a>
       <a data-panel="account"><span class="ico">🔐</span> <span>账号管理</span></a>
+      <a data-panel="wifi-config"><span class="ico">🌐</span> <span>WiFi配置</span></a>
       <a data-panel="email"><span class="ico">📧</span> <span>邮件通知</span></a>
       <a data-panel="push"><span class="ico">🔗</span> <span>推送通道</span></a>
       <a data-panel="admin"><span class="ico">👤</span> <span>管理员 &amp; 黑名单</span></a>
@@ -245,10 +246,10 @@ const char* htmlPage = R"rawliteral(
     </div>
 
     <!-- ===== Account ===== -->
-    <div class="panel" id="panel-account">
+<div class="panel" id="panel-account">
       <h1 class="page-title">账号管理</h1>
       <p class="page-subtitle">修改 Web 管理界面的登录凭据</p>
-      <form action="/save" method="POST" id="mainForm">
+      <form action="/save" method="POST" id="mainFormAccount">
       <div class="card">
         <div class="card-header">🔐 登录凭据</div>
         <div class="card-body">
@@ -259,7 +260,33 @@ const char* htmlPage = R"rawliteral(
           </div>
         </div>
       </div>
-      <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
+      <button type="submit" class="btn btn-primary btn-block btn-save">保存密码配置</button>
+      </form>
+    </div>
+
+    <div class="panel" id="panel-wifi-config">
+      <h1 class="page-title">WiFi 网络配置</h1>
+      <p class="page-subtitle">修改设备连接的外部 WiFi 网络环境</p>
+      <form action="/save" method="POST" id="mainFormWifi">
+      <div class="card">
+        <div class="card-header">🌐 WiFi 网络设置</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">选择周围的 WiFi (自动扫描)</label>
+              <select class="form-select" name="wifiSsid">
+                %WIFI_SELECT_OPTIONS%
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">WiFi 密码</label>
+              <input class="form-input" type="password" name="wifiPass" value="%WIFI_PASS_VAL%" placeholder="若无密码请留空">
+            </div>
+          </div>
+          <p class="form-hint">提示：更改 WiFi 成功后设备会自动重启尝试联网。若连不上新网络，设备会再次自动弹起临时热点。</p>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block btn-save">保存并重启设备</button>
       </form>
     </div>
 

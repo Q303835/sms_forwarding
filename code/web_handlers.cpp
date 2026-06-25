@@ -133,6 +133,37 @@ void handleRoot() {
   html.replace("%ADMIN_PHONE%", config.adminPhone);
   html.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
 
+  String wifiOptions = "";
+  
+if (WiFi.status() == WL_CONNECTED && WiFi.getMode() == WIFI_STA) {
+    String currentSsid = WiFi.SSID();
+    wifiOptions += "<option value=\"" + htmlEscape(currentSsid) + "\" selected>";
+    wifiOptions += htmlEscape(currentSsid) + " (已连接 - 信号: " + String(WiFi.RSSI()) + " dBm)</option>";
+    wifiOptions += "<option value=\"\">[提示：若需重新配网，请将设备带离当前无线区域或断开路由器]</option>";
+  } 
+  else {
+    logCaptureLn("处于配网热点状态下，正在扫描周围 WiFi 信号...");
+    int n = WiFi.scanNetworks();
+    if (n == 0) {
+      wifiOptions += "<option value=''>未扫描到任何无线网络</option>";
+    } else {
+      for (int i = 0; i < n; ++i) {
+        String scannedSsid = WiFi.SSID(i);
+        int32_t rssi = WiFi.RSSI(i);
+        String selected = (scannedSsid == WiFi.SSID()) ? " selected" : "";
+        wifiOptions += "<option value=\"" + htmlEscape(scannedSsid) + "\"" + selected + ">";
+        wifiOptions += htmlEscape(scannedSsid) + " (" + String(rssi) + " dBm)</option>";
+      }
+    }
+    WiFi.scanDelete();
+  }
+
+  // 渲染到前端
+  html.replace("%WIFI_SELECT_OPTIONS%", wifiOptions);
+  html.replace("%WIFI_PASS_VAL%", String(WIFI_PASS)); // 改为直接拿原有的宏定义
+  // ====================================================================
+  // ====================================================================
+
   // 概览页面的配置状态
   bool emailOk = config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
                  config.smtpPass.length() > 0 && config.smtpSendTo.length() > 0;
@@ -886,7 +917,7 @@ void handlePing() {
 void handleSave() {
   if (!checkAuth()) return;
 
-  // 账号管理表单：只在字段存在时更新
+  // 1. 账号管理表单：更新 Web 登录凭据
   if (server.hasArg("webUser")) {
     String newWebUser = server.arg("webUser");
     if (newWebUser.length() == 0) newWebUser = DEFAULT_WEB_USER;
@@ -898,68 +929,70 @@ void handleSave() {
     config.webPass = newWebPass;
   }
 
-  // 邮件通知表单：只在字段存在时更新
-  if (server.hasArg("smtpServer")) {
-    config.smtpServer = server.arg("smtpServer");
+  // ============ 【WiFi 独立表单参数拦截】 ============
+  bool hasNewWifi = false;
+  if (server.hasArg("wifiSsid") && server.arg("wifiSsid").length() > 0) {
+    config.wifiSsid = server.arg("wifiSsid");
+    config.wifiPass = server.hasArg("wifiPass") ? server.arg("wifiPass") : "";
+    logCaptureLn("网页端收到新 WiFi 配置，已成功保存进系统类。");
+    hasNewWifi = true;
   }
-  if (server.hasArg("smtpPort")) {
-    config.smtpPort = server.arg("smtpPort").toInt();
-    if (config.smtpPort == 0) config.smtpPort = 465;
-  }
-  if (server.hasArg("smtpUser")) {
-    config.smtpUser = server.arg("smtpUser");
-  }
-  if (server.hasArg("smtpPass")) {
-    config.smtpPass = server.arg("smtpPass");
-  }
-  if (server.hasArg("smtpSendTo")) {
-    config.smtpSendTo = server.arg("smtpSendTo");
-  }
+  // ===================================================
 
-  // 管理员 & 黑名单表单：只在字段存在时更新
-  if (server.hasArg("adminPhone")) {
-    config.adminPhone = server.arg("adminPhone");
-  }
-  if (server.hasArg("numberBlackList")) {
-    config.numberBlackList = server.arg("numberBlackList");
-  }
+  // 2. 邮件通知表单更新
+  if (server.hasArg("smtpServer")) { config.smtpServer = server.arg("smtpServer"); }
+  if (server.hasArg("smtpPort")) { config.smtpPort = server.arg("smtpPort").toInt(); if (config.smtpPort == 0) config.smtpPort = 465; }
+  if (server.hasArg("smtpUser")) { config.smtpUser = server.arg("smtpUser"); }
+  if (server.hasArg("smtpPass")) { config.smtpPass = server.arg("smtpPass"); }
+  if (server.hasArg("smtpSendTo")) { config.smtpSendTo = server.arg("smtpSendTo"); }
 
-  // 推送通道配置：只在对应通道的字段存在时更新
+  // 3. 管理员 & 黑名单表单更新
+  if (server.hasArg("adminPhone")) { config.adminPhone = server.arg("adminPhone"); }
+  if (server.hasArg("numberBlackList")) { config.numberBlackList = server.arg("numberBlackList"); }
+
+  // 4. 推送通道配置循环更新
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String idx = String(i);
-    String enKey = "push" + idx + "en";
-    String typeKey = "push" + idx + "type";
-    String urlKey = "push" + idx + "url";
-    String nameKey = "push" + idx + "name";
-    String k1Key = "push" + idx + "key1";
-    String k2Key = "push" + idx + "key2";
-    String bodyKey = "push" + idx + "body";
-    // 只要该通道的任一字段存在，就更新整个通道
-    if (server.hasArg(enKey) || server.hasArg(typeKey) || server.hasArg(urlKey) ||
-        server.hasArg(nameKey) || server.hasArg(k1Key) || server.hasArg(k2Key) ||
-        server.hasArg(bodyKey)) {
+    String enKey = "push" + idx + "en"; String typeKey = "push" + idx + "type"; String urlKey = "push" + idx + "url";
+    String nameKey = "push" + idx + "name"; String k1Key = "push" + idx + "key1"; String k2Key = "push" + idx + "key2"; String bodyKey = "push" + idx + "body";
+    if (server.hasArg(enKey) || server.hasArg(typeKey) || server.hasArg(urlKey) || server.hasArg(nameKey) || server.hasArg(k1Key) || server.hasArg(k2Key) || server.hasArg(bodyKey)) {
       config.pushChannels[i].enabled = server.hasArg(enKey) && server.arg(enKey) == "on";
-      if (server.hasArg(typeKey)) {
-        int typeVal = server.arg(typeKey).toInt();
-        if (isValidPushType(typeVal)) {
-          config.pushChannels[i].type = (PushType)typeVal;
-        }
-      }
-      config.pushChannels[i].url = server.arg(urlKey);
-      config.pushChannels[i].name = server.arg(nameKey);
-      config.pushChannels[i].key1 = server.arg(k1Key);
-      config.pushChannels[i].key2 = server.arg(k2Key);
-      config.pushChannels[i].customBody = server.arg(bodyKey);
-      if (config.pushChannels[i].name.length() == 0) {
-        config.pushChannels[i].name = "通道" + String(i + 1);
-      }
+      if (server.hasArg(typeKey)) { int typeVal = server.arg(typeKey).toInt(); if (isValidPushType(typeVal)) { config.pushChannels[i].type = (PushType)typeVal; } }
+      config.pushChannels[i].url = server.arg(urlKey); config.pushChannels[i].name = server.arg(nameKey);
+      config.pushChannels[i].key1 = server.arg(k1Key); config.pushChannels[i].key2 = server.arg(k2Key); config.pushChannels[i].customBody = server.arg(bodyKey);
+      if (config.pushChannels[i].name.length() == 0) { config.pushChannels[i].name = "通道" + String(i + 1); }
     }
   }
   
+  // 持久化保存至 NVS Flash 闪存
   saveConfig();
   configValid = isConfigValid();
   
-  String html = R"rawliteral(
+  // 5. 动态构建提示页面
+  String html;
+  if (hasNewWifi) {
+    html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>保存并重启</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; }
+    .success { background: #0070f3; color: white; padding: 25px; border-radius: 10px; display: inline-block; max-width: 500px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="success">
+    <h2>🌐 网络配置保存成功！</h2>
+    <p>设备正在重启以无缝接入新选定的 WiFi 网络，当前管理页面即将断开...</p>
+    <p>请将您的手机重新接回原本的正常网络。大约 15 秒后，系统将自动读取新无线记忆联网。</p>
+  </div>
+</body>
+</html>
+)rawliteral";
+  } else {
+    html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
@@ -974,23 +1007,35 @@ void handleSave() {
 <body>
   <div class="success">
     <h2>✅ 配置保存成功！</h2>
-    <p>3秒后返回配置页面...</p>
-    <p>如果修改了账号密码，请使用新的账号密码登录</p>
+    <p>3秒后自动返回主配置页面...</p>
+    <p>如果修改了账号密码，请使用新的凭据重新登录。</p>
   </div>
 </body>
 </html>
 )rawliteral";
+  }
+
+  // 🔑 关键修复点：无论哪种保存，都必须先把构建好的 html 发送给浏览器回包！
   server.send(200, "text/html", html);
   
-  // 如果配置有效，发送启动通知
+  // 6. 如果配置有效，异步发送开机邮件通知
   if (configValid) {
     logCaptureLn(String("配置有效，发送启动通知..."));
-    String subject = "短信转发器配置已更新";
-    String body = "设备配置已更新\n设备地址: " + getDeviceUrl();
+    String subject = "短信转发器配置已更新"; 
+    String body = "设备配置已更新\n";
+    body += "本机号码: " + localPhoneNumber + "\n";
+    body += "设备地址: " + getDeviceUrl();
+    //String body = "设备配置已更新\n设备地址: " + getDeviceUrl();
     sendEmailNotification(subject.c_str(), body.c_str());
   }
-}
 
+  // 7. 只有在真正修改了 WiFi 时，才执行硬件延迟重启
+  if (hasNewWifi) {
+    logCaptureLn("✓ 检测到网络环境变更，2 秒后将重启硬件无缝连网！");
+    delay(2000);
+    ESP.restart();
+  }
+}
 // 处理日志查询请求 — 返回环形缓冲区中的日志行
 void handleLog() {
   if (!checkAuth()) return;
