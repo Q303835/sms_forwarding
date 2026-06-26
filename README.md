@@ -36,6 +36,7 @@
 - 要重新配置WiFi。就将设备带离WiFi范围。或者直接关闭路由器。esp32c3连接不到WiFi就会自动放出AP热点
 
 ## 完善esim管理相关内容
+- 增加，查询通知，上报通知等。
 - 验证码提取到标题显示
 - 获取手机号码。在推送消息最底下，加上手机号和时间，方便区分
 
@@ -126,6 +127,7 @@ lib：
 - **pdulib** by David Henry
 
 需要在`Arduino IDE`中安装ESP32开发板支持，参考[官方文档](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)，版型选`MakerGO ESP32 C3 SuperMini`。
-
+# 烧录前。改一下内存使用，由于添加了一些代码，默认内存不够用
+![](assets/烧录说明.png)
 ## 友链
 [LINUX DO](https://linux.do)
