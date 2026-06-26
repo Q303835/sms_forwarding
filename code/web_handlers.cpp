@@ -532,18 +532,33 @@ void handleQuery() {
     }
     message += "<tr><td>ICCID</td><td>" + iccid + "</td></tr>";
     
-    // 查询本机号码 (如果SIM卡支持)
-    resp = sendATCommand("AT+CNUM", 2000);
-    String phoneNum = "未存储或不支持";
-    if (resp.indexOf("+CNUM:") >= 0) {
-      int idx = resp.indexOf(",\"");
-      if (idx >= 0) {
-        int endIdx = resp.indexOf("\"", idx + 2);
-        if (endIdx > idx) {
-          phoneNum = resp.substring(idx + 2, endIdx);
-        }
+// ============ 查询本机号码 (实时探测 + 缓存兜底) ============
+    String cnumResp = sendATCommand("AT+CNUM", 1500);
+    String liveNum = "";
+    
+    // 尝试解析 AT+CNUM 的返回结果
+    int firstQuote = cnumResp.indexOf("\",\"");
+    if (firstQuote != -1) {
+      int secondQuote = cnumResp.indexOf("\"", firstQuote + 3);
+      if (secondQuote != -1) {
+        liveNum = cnumResp.substring(firstQuote + 3, secondQuote);
       }
     }
+    liveNum.replace("NonNull", "");
+    liveNum.trim();
+
+    // 核心逻辑：如果本次从底层芯片真实读到了号码，就强制更新全局缓存！
+    if (liveNum.length() > 0) {
+        localPhoneNumber = liveNum;
+        logCaptureLn("已从底层模组读取并更新本机号码: " + localPhoneNumber);
+    } 
+
+    // 决定最终显示的内容（如果刚才没读到，就会自然沿用缓存里的号码）
+    String phoneNum = localPhoneNumber;
+    if (phoneNum.length() == 0 || phoneNum == "未知号码") {
+        phoneNum = "未存储或不支持 (海外漫游卡常见)";
+    }
+    
     message += "<tr><td>本机号码</td><td>" + phoneNum + "</td></tr>";
     
     message += "</table>";
@@ -1070,16 +1085,24 @@ void handleModem() {
   bool success = false;
   String message = "";
 
-  if (action == "restart") {
-    // AT 软重启 — 先响应浏览器再初始化，防止浏览器超时重试
+if (action == "restart") {
+    // AT 软重启 — 先响应浏览器
     logCaptureLn(String("网页端请求软重启模组..."));
     server.send(200, "application/json", "{\"success\":true,\"message\":\"正在软重启模组，请等待约 15 秒后刷新页面\"}");
+    
     String resp = sendATCommand("AT+CFUN=1,1", 15000);
     success = (resp.indexOf("OK") >= 0);
-    message = success ? "模组软重启成功" : "软重启失败";
+    message = success ? "模组软重启指令已发送" : "软重启指令发送失败";
     logCaptureLn(String(message + ": " + resp));
-    if (success) modemInit();
     busy = false;
+    return;
+  }
+  else if (action == "init") {
+    // ============ 【核心新增接口】 ============
+    // 专门用于前端轮询探测到模组开机后，呼叫此接口恢复短信配置
+    logCaptureLn(String("网页端请求重新初始化模组配置..."));
+    modemInit(); 
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"模组环境重新配置完成\"}");
     return;
   }
   else if (action == "hardreset") {
@@ -1379,8 +1402,41 @@ void handleESim() {
   }
   else if (action == "notifretrieve") {
     logCaptureLn(String("网页端获取eSIM待处理通知..."));
-    message = "通知获取功能开发中...";
-    success = true;
+    String htmlTable;
+    // 调用我们在 esim.cpp 中新增的函数
+    if (esimRetrieveNotifications(htmlTable)) {
+      success = true;
+      message = htmlTable; // 直接将生成的 HTML 表格塞进 JSON message 里
+    } else {
+      success = false;
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "notifclear") {
+    logCaptureLn(String("网页端请求强制清理eSIM通知..."));
+    int clearedCount = 0;
+    if (esimClearAllNotifications(&clearedCount)) {
+      success = true;
+      if (clearedCount > 0) {
+        message = "成功清理了 " + String(clearedCount) + " 条通知！";
+      } else {
+        message = "卡内没有需要清理的通知。";
+      }
+    } else {
+      success = false;
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "notifprocess") {
+    logCaptureLn(String("网页端请求一键上报并释放eSIM配置..."));
+    String htmlLog;
+    if (esimProcessNotifications(htmlLog)) {
+      success = true;
+      message = htmlLog;
+    } else {
+      success = false;
+      message = esimGetLastError();
+    }
   }
   else {
     message = "未知操作: " + action;

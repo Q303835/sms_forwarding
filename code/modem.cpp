@@ -49,6 +49,7 @@ void resetModule() {
 
 // 模组 AT 初始化流程（setup 中调用，resetModule 后也调用）
 void modemInit() {
+  localPhoneNumber = "";
   // 清掉上电噪声/残留
   while (Serial1.available()) Serial1.read();
 

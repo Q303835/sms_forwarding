@@ -24,11 +24,14 @@ struct ESimProfile {
 bool esimInit();
 bool esimGetEID(char* eid, size_t bufferSize);
 int esimGetProfiles(ESimProfile* profiles, int maxProfiles);
-bool esimEnableProfile(const char* iccidOrAid);
-bool esimDisableProfile(const char* iccidOrAid);
-bool esimDeleteProfile(const char* iccidOrAid);
-bool esimSwitchProfile(const char* iccidOrAid);
-bool esimGetNotificationCount(int* count);
+bool esimEnableProfile(const char* iccidOrAid);//启用esim配置文件
+bool esimDisableProfile(const char* iccidOrAid);//禁用esim配置文件
+bool esimDeleteProfile(const char* iccidOrAid);//删除esim配置文件
+bool esimSwitchProfile(const char* iccidOrAid);//切换esim配置文件
+bool esimGetNotificationCount(int* count);//获取esim通知数量
+bool esimRetrieveNotifications(String& output);//获取esim通知
+bool esimClearAllNotifications(int* clearedCount);//清理esim通知
+bool esimProcessNotifications(String& outputLog);//一键上报并释放esim
 const char* esimGetLastError();
 
 bool handleSerialConsole();

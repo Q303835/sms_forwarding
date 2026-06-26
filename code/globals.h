@@ -40,7 +40,5 @@ extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];
 extern String localPhoneNumber;
 // 声明刷新手机号函数
 void refreshLocalPhoneNumber();
-// 声明一个后台刷新号码的倒计时变量
-extern unsigned long pendingSimRefreshTime;
 
 #endif

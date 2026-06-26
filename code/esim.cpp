@@ -1,9 +1,11 @@
 #include "esim.h"
 #include "modem.h"
 #include "web_handlers.h"
-
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include "mbedtls/base64.h"
 #include <ctype.h>
-unsigned long pendingSimRefreshTime = 0;
+
 #if ESIM_PROFILE_LOG
 #define ESIM_PROFILE_LOG_LN(expr) logCaptureLn(expr)
 #else
@@ -859,16 +861,18 @@ static bool profileOperation(uint32_t outerTag, const char* idText, bool refresh
 }
 
 bool esimEnableProfile(const char* iccidOrAid) {
-  if (profileOperation(0xBF31, iccidOrAid, true, true)) {
-    logCaptureLn("启用配置成功，网页端立即放行，4秒后后台自动刷新号码...");
-    pendingSimRefreshTime = millis() + 4000; // 设置后台闹钟
+  // 【修改1】：强制将 refresh 设为 false，彻底静默
+  if (profileOperation(0xBF31, iccidOrAid, false, true)) {
+    // 【修改2】：删除了后端的 4 秒闹钟，交给前端处理
+    logCaptureLn("启用配置成功，网页端将接管软重启流程...");
     return true;
   }
   return false;
 }
 
 bool esimDisableProfile(const char* iccidOrAid) {
-  return profileOperation(0xBF32, iccidOrAid, true, false);
+  // 【修改3】：强制将 refresh 设为 false
+  return profileOperation(0xBF32, iccidOrAid, false, false);
 }
 
 bool esimDeleteProfile(const char* iccidOrAid) {
@@ -877,36 +881,170 @@ bool esimDeleteProfile(const char* iccidOrAid) {
 
 bool esimSwitchProfile(const char* iccidOrAid) {
   bool ok = false;
-  if (profileOperation(0xBF31, iccidOrAid, true, true)) {
+  
+  // 第一步：直接尝试静默切换 (refresh=false)
+  if (profileOperation(0xBF31, iccidOrAid, false, true)) {
     ok = true;
-  } else if (s_lastProfileResult == 5) {
-    logCaptureLn(String("eSIM 切换返回 CAT busy，改用 refresh=false 重试"));
-    if (profileOperation(0xBF31, iccidOrAid, false, true)) {
-      logCaptureLn(String("eSIM 无刷新切换成功，可能需要重启模组/重新注册网络后生效"));
+  } 
+  // 第二步：精简掉原来无意义的嵌套，直接进入 lpac 兼容格式重试
+  else if (s_lastProfileResult == 5) {
+    logCaptureLn(String("eSIM 返回 CAT busy，改用 lpac 兼容格式静默重试"));
+    // 同样必须保持 refresh=false
+    if (profileOperation(0xBF31, iccidOrAid, false, true, true)) {
+      logCaptureLn(String("eSIM lpac兼容格式静默切换成功"));
       ok = true;
-    } else if (s_lastProfileResult == 5) {
-      logCaptureLn(String("eSIM 仍返回 CAT busy，改用 lpac 兼容格式 refresh=false 重试"));
-      if (profileOperation(0xBF31, iccidOrAid, false, true, true)) {
-        logCaptureLn(String("eSIM lpac兼容格式切换成功，可能需要重启模组/重新注册网络后生效"));
-        ok = true;
-      }
     }
   }
-
-  // ============ 【核心新增】：切卡成功后重新抓取手机号 ============
   if (ok) {
-logCaptureLn("切卡指令已发送，网页端立即放行，4秒后后台自动刷新号码...");
-  pendingSimRefreshTime = millis() + 4000; // 设定一个 4 秒后的后台闹钟
+    logCaptureLn("切卡指令已生效，网页端将接管软重启与智能探测流程...");
   }
-  // =============================================================
-
+  
   return ok;
 }
 
 bool esimGetNotificationCount(int* count) {
-  if (count) *count = 0;
-  setError("通知查询暂未实现");
-  return false;
+  if (!count) {
+    setError("无效的指针参数");
+    return false;
+  }
+  *count = 0;
+
+  ESIM_PROFILE_LOG_LN("eSIM 查询通知数量开始...");
+
+  // 构造 ListNotification 请求 (Tag: 0xBF28)
+  // 根据我们的 AT 测试，BF 28 00 就可以完美获取所有通知
+  uint8_t request[] = { 0xBF, 0x28, 0x00 };
+  
+  uint8_t* resp = NULL;
+  size_t respLen = 0;
+
+  // 发送 APDU 
+  // (es10xCommand 非常强大，内部会自动打开通道、处理 61xx 的 GET RESPONSE 拼接长数据，并关闭通道)
+  if (!es10xCommand(request, sizeof(request), &resp, &respLen)) {
+    // 错误信息已经在 es10xCommand 内部通过 setError 设置了
+    return false;
+  }
+
+  TlvNode top;
+  // 解析最外层的 ListNotification 响应 (Tag: BF28)
+  if (!readTlv(resp, respLen, 0, &top) || top.tag != 0xBF28) {
+    free(resp);
+    setError("无法解析通知列表响应: 未找到顶层 BF28 标签");
+    return false;
+  }
+
+  TlvNode metadataNode;
+  // 查找 NotificationMetadata 列表 (Tag: A0)
+  if (!findChildTag(top.value, top.length, 0xA0, &metadataNode)) {
+    // 如果没有找到 A0 标签，或者数据为空，说明当前没有任何待处理的通知
+    ESIM_PROFILE_LOG_LN("eSIM 未发现待处理通知");
+    *count = 0;
+    free(resp);
+    return true;
+  }
+
+  // 遍历 A0 节点的内容，统计 PendingNotification (Tag: BF2F) 的数量
+  int notificationCount = 0;
+  size_t pos = 0;
+  TlvNode notificationNode;
+  
+  while (readTlv(metadataNode.value, metadataNode.length, pos, &notificationNode)) {
+    pos = notificationNode.nextOffset;
+    if (notificationNode.tag == 0xBF2F) {
+      notificationCount++;
+    }
+  }
+
+  ESIM_PROFILE_LOG_LN(String("eSIM 成功获取通知数量: ") + String(notificationCount));
+  *count = notificationCount;
+  
+  free(resp); // 释放内存，防止泄漏
+  return true;
+}
+
+bool esimRetrieveNotifications(String& output) {
+  output = "";
+  // 依然是发送 ListNotification 请求
+  uint8_t request[] = { 0xBF, 0x28, 0x00 };
+  uint8_t* resp = NULL;
+  size_t respLen = 0;
+
+  if (!es10xCommand(request, sizeof(request), &resp, &respLen)) {
+    return false;
+  }
+
+  TlvNode top, metadataNode;
+  if (!readTlv(resp, respLen, 0, &top) || top.tag != 0xBF28) {
+    free(resp);
+    setError("无法解析通知列表响应");
+    return false;
+  }
+
+  if (!findChildTag(top.value, top.length, 0xA0, &metadataNode)) {
+    output = "卡内暂无待处理的通知数据。";
+    free(resp);
+    return true;
+  }
+
+  size_t pos = 0;
+  TlvNode notifNode;
+  int count = 0;
+  
+  // 准备拼接前端显示的 HTML 表格
+  output += "<table class=\"info-table\">";
+  output += "<tr><th>序号(Seq)</th><th>操作类型</th><th>目标平台(RSP)</th><th>ICCID</th></tr>";
+
+  while (readTlv(metadataNode.value, metadataNode.length, pos, &notifNode)) {
+    pos = notifNode.nextOffset;
+    if (notifNode.tag == 0xBF2F) { // 发现一个 PendingNotification
+      count++;
+      int seq = 0;
+      String opStr = "未知";
+      char iccidStr[32] = "-";
+      char addrStr[64] = "-";
+
+      size_t childPos = 0;
+      TlvNode child;
+      // 遍历通知内部的详细字段
+      while (readTlv(notifNode.value, notifNode.length, childPos, &child)) {
+        childPos = child.nextOffset;
+        if (child.tag == 0x80) {
+          // 通知序号
+          seq = parseInteger(child.value, child.length);
+        } else if (child.tag == 0x81) {
+          // 操作类型 (ASN.1 BIT STRING 格式)
+          String hex = bytesToHex(child.value, child.length);
+          if (hex == "0780") opStr = "安装 (Install)";
+          else if (hex == "0640") opStr = "启用 (Enable)"; // 更正解析：根据SGP.22规范
+          else if (hex == "0520") opStr = "禁用 (Disable)";
+          else if (hex == "0410") opStr = "删除 (Delete)";
+          else opStr = "代码: " + hex; // 未知操作则直接打印 HEX
+        } else if (child.tag == 0x0C) {
+          // 目标服务器地址
+          copyBytesAsString(addrStr, sizeof(addrStr), child.value, child.length);
+        } else if (child.tag == 0x5A) {
+          // ICCID
+          bcdToIccid(iccidStr, sizeof(iccidStr), child.value, child.length);
+        }
+      }
+
+      // 拼接入表格行
+      output += "<tr>";
+      output += "<td>" + String(seq) + "</td>";
+      output += "<td>" + opStr + "</td>";
+      output += "<td>" + String(addrStr) + "</td>";
+      output += "<td>" + String(iccidStr) + "</td>";
+      output += "</tr>";
+    }
+  }
+  output += "</table>";
+
+  if (count == 0) {
+    output = "卡内暂无待处理的通知数据。";
+  }
+
+  free(resp);
+  return true;
 }
 
 static void printProfile(const ESimProfile& profile, int index) {
@@ -1031,4 +1169,228 @@ bool handleSerialConsole() {
   }
 
   return consumed;
+}
+
+bool esimClearAllNotifications(int* clearedCount) {
+  if (clearedCount) *clearedCount = 0;
+  
+  // 第一步：获取当前所有通知的序号
+  uint8_t request[] = { 0xBF, 0x28, 0x00 };
+  uint8_t* resp = NULL;
+  size_t respLen = 0;
+
+  if (!es10xCommand(request, sizeof(request), &resp, &respLen)) {
+    return false;
+  }
+
+  TlvNode top, metadataNode;
+  if (!readTlv(resp, respLen, 0, &top) || top.tag != 0xBF28 ||
+      !findChildTag(top.value, top.length, 0xA0, &metadataNode)) {
+    free(resp);
+    return true; // 没有通知，直接返回成功
+  }
+
+  // 提取所有的序号 (SeqNumber)
+  int seqs[30]; // 假设最多一次处理30条
+  int count = 0;
+  size_t pos = 0;
+  TlvNode notifNode;
+
+  while (readTlv(metadataNode.value, metadataNode.length, pos, &notifNode) && count < 30) {
+    pos = notifNode.nextOffset;
+    if (notifNode.tag == 0xBF2F) { // PendingNotification
+      TlvNode seqNode;
+      if (findChildTag(notifNode.value, notifNode.length, 0x80, &seqNode)) {
+        seqs[count++] = parseInteger(seqNode.value, seqNode.length);
+      }
+    }
+  }
+  free(resp);
+
+  // 第二步：遍历删除每个序号
+  int successCount = 0;
+  for (int i = 0; i < count; i++) {
+    uint8_t delReq[16];
+    size_t delPos = 0;
+    
+    // 构造 seqNumber 的 TLV (Tag 0x80)
+    uint8_t seqTlv[8];
+    size_t seqLen = 0;
+    
+    if (seqs[i] < 256) {
+      uint8_t val = (uint8_t)seqs[i];
+      appendTlv(seqTlv, &seqLen, 0x80, &val, 1);
+    } else {
+      // 兼容序号大于255的情况
+      uint8_t val[2] = {(uint8_t)(seqs[i] >> 8), (uint8_t)(seqs[i] & 0xFF)};
+      appendTlv(seqTlv, &seqLen, 0x80, val, 2);
+    }
+    
+    // 组装最终的 RemoveNotificationFromList 请求 (Tag 0xBF30)
+    appendTlv(delReq, &delPos, 0xBF30, seqTlv, seqLen);
+
+    uint8_t* delResp = NULL;
+    size_t delRespLen = 0;
+    
+    if (es10xCommand(delReq, delPos, &delResp, &delRespLen)) {
+      TlvNode delTop, resNode;
+      // 检查返回值是否为 0 (成功)
+      if (readTlv(delResp, delRespLen, 0, &delTop) && delTop.tag == 0xBF30 &&
+          findChildTag(delTop.value, delTop.length, 0x80, &resNode)) {
+        if (parseInteger(resNode.value, resNode.length) == 0) {
+          successCount++;
+        }
+      }
+      free(delResp);
+    }
+  }
+
+  if (clearedCount) *clearedCount = successCount;
+  return true;
+}
+
+bool esimProcessNotifications(String& outputLog) {
+  outputLog = "";
+  
+  // 第一步：获取当前所有通知
+  uint8_t request[] = { 0xBF, 0x28, 0x00 };
+  uint8_t* resp = NULL;
+  size_t respLen = 0;
+
+  if (!es10xCommand(request, sizeof(request), &resp, &respLen)) {
+    outputLog = "读取通知失败: " + String(esimGetLastError());
+    return false;
+  }
+
+  TlvNode top, metadataNode;
+  if (!readTlv(resp, respLen, 0, &top) || top.tag != 0xBF28 ||
+      !findChildTag(top.value, top.length, 0xA0, &metadataNode)) {
+    outputLog = "完美！卡内没有需要上报的待处理通知。";
+    free(resp);
+    return true;
+  }
+
+  size_t pos = 0;
+  TlvNode notifNode;
+  int processCount = 0;
+  int successCount = 0;
+
+  outputLog += "<ul style='text-align:left; font-size:12px; margin-left:15px; line-height:1.8;'>";
+
+  // 第二步：遍历每一个通知
+  while (pos < metadataNode.length) {
+    size_t startOffset = pos; // 记录 BF2F 标签的起始位置
+    if (!readTlv(metadataNode.value, metadataNode.length, pos, &notifNode)) break;
+    pos = notifNode.nextOffset;
+
+    if (notifNode.tag == 0xBF2F) {
+      processCount++;
+      int seq = 0;
+      char addrStr[64] = "";
+
+      // 解析内部信息拿到序号(Seq)和目标地址(RSP)
+      size_t childPos = 0;
+      TlvNode child;
+      while (readTlv(notifNode.value, notifNode.length, childPos, &child)) {
+        childPos = child.nextOffset;
+        if (child.tag == 0x80) seq = parseInteger(child.value, child.length);
+        else if (child.tag == 0x0C) copyBytesAsString(addrStr, sizeof(addrStr), child.value, child.length);
+      }
+
+      if (strlen(addrStr) == 0) {
+        outputLog += "<li>[跳过] Seq " + String(seq) + " 无目标服务器地址</li>";
+        continue;
+      }
+
+      // 提取这整条通知的纯净二进制原始数据
+      size_t rawLen = notifNode.nextOffset - startOffset;
+      const uint8_t* rawData = metadataNode.value + startOffset;
+
+      // 使用 mbedtls 将原始二进制转换为 Base64 字符串
+      size_t b64Len = 0;
+      mbedtls_base64_encode(NULL, 0, &b64Len, rawData, rawLen); // 获取长度
+      unsigned char* b64Buf = (unsigned char*)malloc(b64Len + 1);
+      
+      if (b64Buf) {
+        mbedtls_base64_encode(b64Buf, b64Len + 1, &b64Len, rawData, rawLen);
+        String b64Str = String((char*)b64Buf);
+        free(b64Buf);
+
+        // 发起 ESP32 原生 HTTPS 请求
+        // 1. 不要加末尾的斜杠。
+        String url = "https://esim-proxy.lixing.me/esim_proxy.php"; 
+        
+        String payload = "{\"pendingNotification\":\"" + b64Str + "\"}";
+
+        WiFiClientSecure *client = new WiFiClientSecure;
+        if (client) {
+          client->setInsecure(); 
+          client->setHandshakeTimeout(15000); 
+          
+          HTTPClient https;
+          https.setTimeout(15000); 
+
+          if (https.begin(*client, url)) {
+            https.addHeader("Content-Type", "application/json");
+            
+            // 2. 【关键新增】：把真正的目标地址通过 Header 塞给 Cloudflare，让它帮忙转发
+            https.addHeader("X-Target-Host", String(addrStr)); 
+            
+            // (注意：这里去掉了原来的 X-Admin-Protocol 和 User-Agent，因为已经在 Cloudflare 代码里加上了)
+
+            int httpCode = https.POST(payload);
+
+          // HTTP 200, 201, 204 都代表服务器接收成功
+          if (httpCode >= 200 && httpCode < 300) {
+            
+            // 第三步：运营商确认了，我们开始销毁本地卡片记录 (BF30 指令)
+            uint8_t delReq[16]; size_t delPos = 0;
+            uint8_t seqTlv[8]; size_t seqLen = 0;
+            
+            if (seq < 256) { 
+              uint8_t val = (uint8_t)seq; 
+              appendTlv(seqTlv, &seqLen, 0x80, &val, 1); 
+            } else { 
+              uint8_t val[2] = {(uint8_t)(seq >> 8), (uint8_t)(seq & 0xFF)}; 
+              appendTlv(seqTlv, &seqLen, 0x80, val, 2); 
+            }
+            appendTlv(delReq, &delPos, 0xBF30, seqTlv, seqLen);
+
+            uint8_t* delResp = NULL; size_t delRespLen = 0;
+            bool delOk = false;
+            if (es10xCommand(delReq, delPos, &delResp, &delRespLen)) {
+              TlvNode delTop, resNode;
+              if (readTlv(delResp, delRespLen, 0, &delTop) && delTop.tag == 0xBF30 &&
+                  findChildTag(delTop.value, delTop.length, 0x80, &resNode)) {
+                if (parseInteger(resNode.value, resNode.length) == 0) delOk = true;
+              }
+              free(delResp);
+            }
+
+            if (delOk) {
+              outputLog += "<li style='color:#4CAF50;'><b>[成功释放]</b> Seq " + String(seq) + " 已上报至 " + String(addrStr) + "，并且本地清理完毕。</li>";
+              successCount++;
+            } else {
+              outputLog += "<li style='color:#FF9800;'><b>[警告]</b> Seq " + String(seq) + " 服务器已接收，但本地卡片删除失败。</li>";
+            }
+          } else {
+            String rspBody = https.getString();
+            if(rspBody.length() > 40) rspBody = rspBody.substring(0, 40) + "...";
+            outputLog += "<li style='color:#F44336;'><b>[上报被拒]</b> Seq " + String(seq) + " 错误码: " + String(httpCode) + " - " + rspBody + "</li>";
+          }
+          https.end();
+        } else {
+            outputLog += "<li style='color:#F44336;'><b>[网络失败]</b> Seq " + String(seq) + " 无法连接或TLS握手失败: " + String(addrStr) + "</li>";
+          }
+          delete client; // 用完务必释放内存！
+        } // 这是对应最上面 if (client) 的反括号
+      }
+    }
+  }
+  
+  outputLog += "</ul><div style='margin-top:10px; padding-top:10px; border-top:1px solid #ebebeb;'>";
+  outputLog += "处理完成：共发现 " + String(processCount) + " 条待处理通知，成功上报并释放 " + String(successCount) + " 条。</div>";
+  
+  free(resp);
+  return true;
 }

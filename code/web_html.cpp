@@ -468,7 +468,12 @@ const char* htmlPage = R"rawliteral(
       <div class="card">
         <div class="card-header">🔔 通知管理</div>
         <div class="card-body">
-          <div class="btn-row"><button class="btn btn-secondary" onclick="esimAction('notifcount')">查询通知数量</button><button class="btn btn-secondary" onclick="esimAction('notifretrieve')">获取待处理通知</button></div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="esimAction('notifcount')">查询通知数量</button>
+          <button class="btn btn-secondary" onclick="esimAction('notifretrieve')">获取待处理通知</button>
+          <button class="btn btn-primary" onclick="esimAction('notifprocess')">联网上报并清除通知</button>
+          <button class="btn btn-danger" onclick="esimAction('notifclear')">强制销毁本地通知</button>
+        </div>
           <div class="result-box" id="esimNotifResult"></div>
         </div>
       </div>
@@ -648,19 +653,50 @@ const char* htmlPage = R"rawliteral(
     }
 
     // ---- eSIM Management ----
-    function esimAction(action){
+function esimAction(action){
       var resultEl=null;
-      var names={'info':'查询eSIM信息','list':'刷新配置列表','notifcount':'查询通知数量','notifretrieve':'获取待处理通知'};
+      var names={'info':'查询eSIM信息','list':'刷新配置列表','notifcount':'查询通知数量','notifretrieve':'获取待处理通知', 'notifclear':'销毁本地通知', 'notifprocess':'联网上报并清除通知'};
       var name=names[action]||action;
+      if(action==='info' || action==='notifprocess') {
+          resultEl=document.getElementById('esimInfoResult'); // 大屏幕 (顶部)
+      }
+      else if(action==='list') {
+          resultEl=document.getElementById('esimListResult');
+      }
+      else if(action==='notifcount'||action==='notifretrieve'||action==='notifclear') {
+          resultEl=document.getElementById('esimNotifResult'); // 控制台 (底部)
+      }
+      else {
+          resultEl=document.getElementById('esimInfoResult');
+      }
       
-      if(action==='info') resultEl=document.getElementById('esimInfoResult');
-      else if(action==='list') resultEl=document.getElementById('esimListResult');
-      else if(action==='notifcount'||action==='notifretrieve') resultEl=document.getElementById('esimNotifResult');
-      else resultEl=document.getElementById('esimInfoResult');
+      resultEl.className='result-box result-loading';
       
-      resultEl.className='result-box result-loading';resultEl.textContent=name+'中...';
+      // ================= 动态进度条逻辑 =================
+      var progressTimer = null;
+      if (action === 'notifprocess') {
+          resultEl.innerHTML = '🚀 <strong>正在启动批量上报与释放，请勿关闭或刷新页面...</strong><br>' +
+                               '<div style="margin-top:12px; font-weight:bold; color:#0070f3; background:#e6f7ff; padding:10px; border-radius:5px;" id="notifTimer"></div>';
+          var seconds = 0;
+          progressTimer = setInterval(function() {
+              seconds++;
+              var dots = ['.', '..', '...'][seconds % 3]; 
+              var currentItem = Math.floor(seconds / 4) + 1; 
+              var timerEl = document.getElementById('notifTimer');
+              if (timerEl) {
+                  timerEl.innerHTML = '⏱️ 已耗时: <span style="color:#e53935;">' + seconds + '</span> 秒<br>' +
+                                      '📡 正在处理第 ' + currentItem + ' 条，与运营商进行底层加密通信' + dots + '<br>' +
+                                      '<span style="font-size:12px; color:#666; font-weight:normal;">(由于涉及跨国网络与芯片物理读写，单条平均耗时 4~5 秒，系统正在全速运转)</span>';
+              }
+          }, 1000);
+      } else {
+          resultEl.textContent = name + '中...';
+      }
+      // ==========================================================
       
       fetch('/esim?action='+action).then(function(rr){return rr.json()}).then(function(d){
+        if(progressTimer) clearInterval(progressTimer); // 任务完成，停掉计时器
+
         if(d.success){
           resultEl.className='result-box result-success';
           if(action==='info'){
@@ -695,20 +731,67 @@ const char* htmlPage = R"rawliteral(
           resultEl.className='result-box result-error';
           resultEl.innerHTML=name+'失败: '+d.message;
         }
-      }).catch(function(e){resultEl.className='result-box result-error';resultEl.textContent='请求失败: '+e;});
+      }).catch(function(e){
+        if(progressTimer) clearInterval(progressTimer); 
+        resultEl.className='result-box result-error';
+        resultEl.textContent='请求失败: '+e;
+      });
     }
-
-    function esimEnableDisable(iccid, enable){
+function esimEnableDisable(iccid, enable){
       if(!confirm(enable?'确定要启用此eSIM配置吗？':'确定要禁用此eSIM配置吗？'))return;
       var action=enable?'switch':'disable';
+      
+      var resultEl = document.getElementById('esimListResult');
+      resultEl.className = 'result-box result-loading';
+      resultEl.innerHTML = '正在发送' + (enable?'切换':'禁用') + '指令，请勿操作...';
+
       fetch('/esim?action='+action+'&iccid='+encodeURIComponent(iccid)).then(function(rr){return rr.json()}).then(function(d){
         if(d.success){
-          alert(d.message);
-          esimAction('list');
+          if(enable) {
+            resultEl.innerHTML = '✅ 切卡成功！模组正在硬件重启，将自动探测最新状态...';
+            
+            fetch('/modem?action=restart').then(function(){
+              var retries = 0;
+              
+              // 开启智能轮询：每 3.5 秒尝试拉取一次列表
+              var pollTimer = setInterval(function(){
+                retries++;
+                resultEl.innerHTML = '⏳ 模组引导中... 正在进行第 ' + retries + ' 次探测...';
+                
+                // 尝试向后端请求列表数据
+                fetch('/esim?action=list').then(function(r){return r.json()}).then(function(pollData){
+                  // 如果返回 success，说明模组已经完全开机并准备就绪！
+                  if(pollData.success) {
+                    clearInterval(pollTimer); // 停止轮询
+                    esimAction('list');       // 正式渲染新列表
+                  } else if(retries >= 6) {
+                    // 如果重试了6次（约21秒）还没好，可能信号很差
+                    clearInterval(pollTimer);
+                    resultEl.className = 'result-box result-error';
+                    resultEl.innerHTML = '模组找网较慢，请稍后手动点击"刷新配置列表"';
+                  }
+                }).catch(function(e){
+                  if(retries >= 6) {
+                    clearInterval(pollTimer);
+                    resultEl.className = 'result-box result-error';
+                    resultEl.innerHTML = '探测超时，请稍后手动刷新';
+                  }
+                });
+              }, 3500); // 3.5 秒的探测间隔
+              
+            });
+          } else {
+            alert(d.message);
+            esimAction('list');
+          }
         } else {
-          alert('操作失败: '+d.message);
+          resultEl.className = 'result-box result-error';
+          resultEl.innerHTML = '操作失败: '+d.message;
         }
-      }).catch(function(e){alert('请求失败: '+e);});
+      }).catch(function(e){
+        resultEl.className = 'result-box result-error';
+        resultEl.textContent = '请求失败: '+e;
+      });
     }
 
     function esimDelete(iccid){

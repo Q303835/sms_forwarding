@@ -171,11 +171,6 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  // ============ 【新增】：非阻塞后台刷新号码 ============
-  if (pendingSimRefreshTime > 0 && millis() > pendingSimRefreshTime) {
-    pendingSimRefreshTime = 0; // 闹钟响了，先把闹钟关掉
-    refreshLocalPhoneNumber(); // 触发重新获取号码！
-  }
   
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {
