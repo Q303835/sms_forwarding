@@ -15,6 +15,8 @@ void saveConfig() {
   preferences.putString("numBlkList", config.numberBlackList);
   preferences.putString("wifiSsid", config.wifiSsid);
   preferences.putString("wifiPass", config.wifiPass);
+  preferences.putInt("esimProxyMode", config.esimProxyMode);
+  preferences.putString("esimProxyUrl", config.esimProxyUrl);
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String prefix = "push" + String(i);
@@ -45,6 +47,8 @@ void loadConfig() {
   config.numberBlackList = preferences.getString("numBlkList", "");
   config.wifiSsid = preferences.getString("wifiSsid", ""); // 默认读宏定义
   config.wifiPass = preferences.getString("wifiPass", "");
+  config.esimProxyMode = preferences.getInt("esimProxyMode", 1); 
+  config.esimProxyUrl = preferences.getString("esimProxyUrl", "");
   // 加载推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String prefix = "push" + String(i);

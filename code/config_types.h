@@ -46,7 +46,8 @@ struct Config {
   String webUser;      // Web管理账号
   String webPass;      // Web管理密码
   String numberBlackList;  // 号码黑名单（换行符分隔）
-  
+  int esimProxyMode;   // 【新增】0=直连, 1=默认, 2=自建
+  String esimProxyUrl; // 【新增】自建的URL地址
 };
 
 // 默认Web管理账号密码

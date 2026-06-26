@@ -446,9 +446,31 @@ const char* htmlPage = R"rawliteral(
     </div>
 
     <!-- ===== eSIM Management ===== -->
-    <div class="panel" id="panel-esim">
+      <div class="panel" id="panel-esim">
       <h1 class="page-title">eSIM 管理</h1>
       <p class="page-subtitle">管理 eUICC 芯片上的 eSIM 配置文件</p>
+
+      <form action="/save" method="POST">
+      <div class="card">
+        <div class="card-header">⚙️ 通知上报通信方式</div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">选择与运营商(RSP)通信的模式</label>
+            <select class="form-select" name="esimProxyMode" id="esimProxyMode" onchange="toggleProxyUrl()">
+              <option value="1" %PROXY_MODE_1%>🌐 使用默认代理 (推荐，公益服务器，如果失败请尝试自建)</option>
+              <option value="2" %PROXY_MODE_2%>🛠️ 用户自建代理 (使用自己的 PHP 服务)</option>
+              <option value="0" %PROXY_MODE_0%>⚡ 直接连接 (警告：可能因无 SNI 或证书校验失败)</option>
+            </select>
+          </div>
+          <div class="form-group" id="customProxyGroup" style="display:none;">
+            <label class="form-label">自建代理地址 (Proxy URL)</label>
+            <input class="form-input" type="text" name="esimProxyUrl" value="%ESIM_PROXY_URL%" placeholder="http(s)://your-domain.com/esim_proxy.php">
+            <p class="form-hint">填写你部署的 PHP 代理文件完整路径。</p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">保存通信设置</button>
+        </div>
+      </div>
+      </form>
       <div class="card">
         <div class="card-header">📱 eSIM 状态</div>
         <div class="card-body">
@@ -565,8 +587,17 @@ const char* htmlPage = R"rawliteral(
       }
       else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
     }
+    // ---- 【新增】：eSIM Proxy UI 控制 ----
+    function toggleProxyUrl() {
+      var mode = document.getElementById('esimProxyMode');
+      if (mode) {
+        document.getElementById('customProxyGroup').style.display = (mode.value === '2') ? 'block' : 'none';
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
       for (var i = 0; i < %MAX_PUSH_CHANNELS%; i++) { toggleChannel(i); updateTypeHint(i); }
+      toggleProxyUrl(); // 页面加载时初始化代理UI状态
     });
 
     // ---- Send SMS ----

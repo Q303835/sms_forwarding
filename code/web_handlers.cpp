@@ -132,6 +132,11 @@ void handleRoot() {
   html.replace("%SMTP_SEND_TO%", config.smtpSendTo);
   html.replace("%ADMIN_PHONE%", config.adminPhone);
   html.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
+  html.replace("%PROXY_MODE_0%", config.esimProxyMode == 0 ? "selected" : "");
+  html.replace("%PROXY_MODE_1%", config.esimProxyMode == 1 ? "selected" : "");
+  html.replace("%PROXY_MODE_2%", config.esimProxyMode == 2 ? "selected" : "");
+  html.replace("%ESIM_PROXY_URL%", htmlEscape(config.esimProxyUrl));
+
 
   String wifiOptions = "";
   
@@ -943,7 +948,9 @@ void handleSave() {
     if (newWebPass.length() == 0) newWebPass = DEFAULT_WEB_PASS;
     config.webPass = newWebPass;
   }
-
+  //==========用户自建esim通讯服务器===========
+  if (server.hasArg("esimProxyMode")) { config.esimProxyMode = server.arg("esimProxyMode").toInt(); }
+  if (server.hasArg("esimProxyUrl")) { config.esimProxyUrl = server.arg("esimProxyUrl"); }
   // ============ 【WiFi 独立表单参数拦截】 ============
   bool hasNewWifi = false;
   if (server.hasArg("wifiSsid") && server.arg("wifiSsid").length() > 0) {

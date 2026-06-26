@@ -1308,7 +1308,7 @@ bool esimProcessNotifications(String& outputLog) {
 
       // 使用 mbedtls 将原始二进制转换为 Base64 字符串
       size_t b64Len = 0;
-      mbedtls_base64_encode(NULL, 0, &b64Len, rawData, rawLen); // 获取长度
+      mbedtls_base64_encode(NULL, 0, &b64Len, rawData, rawLen); 
       unsigned char* b64Buf = (unsigned char*)malloc(b64Len + 1);
       
       if (b64Buf) {
@@ -1316,74 +1316,111 @@ bool esimProcessNotifications(String& outputLog) {
         String b64Str = String((char*)b64Buf);
         free(b64Buf);
 
-        // 发起 ESP32 原生 HTTPS 请求
-        // 1. 不要加末尾的斜杠。
-        String url = "https://esim-proxy.lixing.me/esim_proxy.php"; 
-        
+        String url;
+        bool useProxy = false;
+
+        // 根据用户的模式选择，动态分配 URL 和 Header
+        if (config.esimProxyMode == 1) {
+            useProxy = true;
+            url = "http://esim-proxy.lxyk.de/esim_proxy.php"; 
+            logCaptureLn("🌐 正在使用默认代理服务器上报...");
+        } 
+        else if (config.esimProxyMode == 2) {
+            useProxy = true;
+            url = config.esimProxyUrl;
+            if (url.length() == 0) {
+                outputLog += "<li><span style='color:#f44336;'>[错误]</span> 未填写自建代理地址！</li>";
+                continue;
+            }
+            logCaptureLn("🌐 正在使用用户自建代理上报: " + url);
+        } 
+        else {
+            useProxy = false;
+            url = "https://" + String(addrStr);
+            logCaptureLn("⚡ 正在尝试直接连接运营商服务器: " + url);
+        }
+
         String payload = "{\"pendingNotification\":\"" + b64Str + "\"}";
 
-        WiFiClientSecure *client = new WiFiClientSecure;
-        if (client) {
-          client->setInsecure(); 
-          client->setHandshakeTimeout(15000); 
-          
-          HTTPClient https;
-          https.setTimeout(15000); 
+        // ============ 智能区分 HTTP 和 HTTPS ============
+        bool isHttps = url.startsWith("https");
+        WiFiClient *client = nullptr; 
 
-          if (https.begin(*client, url)) {
-            https.addHeader("Content-Type", "application/json");
-            
-            // 2. 【关键新增】：把真正的目标地址通过 Header 塞给 Cloudflare，让它帮忙转发
-            https.addHeader("X-Target-Host", String(addrStr)); 
-            
-            // (注意：这里去掉了原来的 X-Admin-Protocol 和 User-Agent，因为已经在 Cloudflare 代码里加上了)
-
-            int httpCode = https.POST(payload);
-
-          // HTTP 200, 201, 204 都代表服务器接收成功
-          if (httpCode >= 200 && httpCode < 300) {
-            
-            // 第三步：运营商确认了，我们开始销毁本地卡片记录 (BF30 指令)
-            uint8_t delReq[16]; size_t delPos = 0;
-            uint8_t seqTlv[8]; size_t seqLen = 0;
-            
-            if (seq < 256) { 
-              uint8_t val = (uint8_t)seq; 
-              appendTlv(seqTlv, &seqLen, 0x80, &val, 1); 
-            } else { 
-              uint8_t val[2] = {(uint8_t)(seq >> 8), (uint8_t)(seq & 0xFF)}; 
-              appendTlv(seqTlv, &seqLen, 0x80, val, 2); 
-            }
-            appendTlv(delReq, &delPos, 0xBF30, seqTlv, seqLen);
-
-            uint8_t* delResp = NULL; size_t delRespLen = 0;
-            bool delOk = false;
-            if (es10xCommand(delReq, delPos, &delResp, &delRespLen)) {
-              TlvNode delTop, resNode;
-              if (readTlv(delResp, delRespLen, 0, &delTop) && delTop.tag == 0xBF30 &&
-                  findChildTag(delTop.value, delTop.length, 0x80, &resNode)) {
-                if (parseInteger(resNode.value, resNode.length) == 0) delOk = true;
-              }
-              free(delResp);
-            }
-
-            if (delOk) {
-              outputLog += "<li style='color:#4CAF50;'><b>[成功释放]</b> Seq " + String(seq) + " 已上报至 " + String(addrStr) + "，并且本地清理完毕。</li>";
-              successCount++;
-            } else {
-              outputLog += "<li style='color:#FF9800;'><b>[警告]</b> Seq " + String(seq) + " 服务器已接收，但本地卡片删除失败。</li>";
-            }
-          } else {
-            String rspBody = https.getString();
-            if(rspBody.length() > 40) rspBody = rspBody.substring(0, 40) + "...";
-            outputLog += "<li style='color:#F44336;'><b>[上报被拒]</b> Seq " + String(seq) + " 错误码: " + String(httpCode) + " - " + rspBody + "</li>";
-          }
-          https.end();
+        if (isHttps) {
+            WiFiClientSecure *secureClient = new WiFiClientSecure;
+            secureClient->setInsecure(); // 忽略证书校验，因此HTTPS绝对能通
+            secureClient->setHandshakeTimeout(15000);
+            client = secureClient;
         } else {
-            outputLog += "<li style='color:#F44336;'><b>[网络失败]</b> Seq " + String(seq) + " 无法连接或TLS握手失败: " + String(addrStr) + "</li>";
-          }
-          delete client; // 用完务必释放内存！
-        } // 这是对应最上面 if (client) 的反括号
+            client = new WiFiClient;     // 普通的 HTTP 客户端
+        }
+
+        if (client) {
+            HTTPClient http; 
+            http.setTimeout(15000);
+
+            if (http.begin(*client, url)) {
+                http.addHeader("Content-Type", "application/json");
+
+                // 只有走代理时，才需要告诉 PHP 脚本去转发到哪个地址
+                if (useProxy) {
+                    http.addHeader("X-Target-Host", String(addrStr));
+                }
+
+                int httpCode = http.POST(payload);
+                
+                // HTTP 200, 201, 204 都代表服务器接收成功
+                if (httpCode >= 200 && httpCode < 300) {
+                    // ============ 找回丢失的卡片销毁逻辑 ============
+                    uint8_t delReq[16];
+                    size_t delPos = 0;
+                    uint8_t seqTlv[8];
+                    size_t seqLen = 0;
+                    
+                    if (seq < 256) {
+                      uint8_t val = (uint8_t)seq;
+                      appendTlv(seqTlv, &seqLen, 0x80, &val, 1);
+                    } else {
+                      uint8_t val[2] = {(uint8_t)(seq >> 8), (uint8_t)(seq & 0xFF)};
+                      appendTlv(seqTlv, &seqLen, 0x80, val, 2);
+                    }
+                    
+                    appendTlv(delReq, &delPos, 0xBF30, seqTlv, seqLen);
+
+                    uint8_t* delResp = NULL;
+                    size_t delRespLen = 0;
+                    
+                    if (es10xCommand(delReq, delPos, &delResp, &delRespLen)) {
+                      TlvNode delTop, resNode;
+                      // 检查卡片是否真正删除了这条通知
+                      if (readTlv(delResp, delRespLen, 0, &delTop) && delTop.tag == 0xBF30 &&
+                          findChildTag(delTop.value, delTop.length, 0x80, &resNode)) {
+                        if (parseInteger(resNode.value, resNode.length) == 0) {
+                          successCount++;
+                          outputLog += "<li><span style='color:#4CAF50;'>[成功释放]</span> Seq " + String(seq) + " 已上报至 " + (useProxy ? "代理服务器" : String(addrStr)) + "，并且本地清理完毕。</li>";
+                        } else {
+                          outputLog += "<li><span style='color:#ff9800;'>[清理失败]</span> Seq " + String(seq) + " 已上报，但本地删除失败。</li>";
+                        }
+                      }
+                      free(delResp);
+                    } else {
+                       outputLog += "<li><span style='color:#ff9800;'>[清理失败]</span> Seq " + String(seq) + " 已上报，但发送删除指令无响应。</li>";
+                    }
+                } else {
+                    String errMsg = "<li><span style='color:#f44336;'>[上报被拒]</span> Seq " + String(seq) + " 错误码: " + String(httpCode) + "</li>";
+                    outputLog += errMsg;
+                    logCaptureLn("❌ " + errMsg);
+                }
+                http.end();
+            } else {
+                String errMsg = "<li><span style='color:#f44336;'>[连接失败]</span> Seq " + String(seq) + " 无法连接到服务器，请检查地址或网络</li>";
+                outputLog += errMsg;
+                logCaptureLn("❌ " + errMsg);
+            }
+            
+            // ⚠️ 极其重要：释放动态分配的内存，防止内存泄漏死机！
+            delete client; 
+        }
       }
     }
   }
