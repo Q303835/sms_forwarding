@@ -11,6 +11,28 @@
 #include "web_handlers.h"
 #include "esim.h"
 
+// 重新获取本机号码的全局函数
+void refreshLocalPhoneNumber() {
+  logCaptureLn(String("正在从SIM卡读取本机号码..."));
+  String cnumResp = sendATCommand("AT+CNUM", 1500);
+  int firstQuote = cnumResp.indexOf("\",\"");
+  if (firstQuote != -1) {
+    int secondQuote = cnumResp.indexOf("\"", firstQuote + 3);
+    if (secondQuote != -1) {
+      localPhoneNumber = cnumResp.substring(firstQuote + 3, secondQuote);
+    }
+  }
+  localPhoneNumber.replace("NonNull", "");
+  localPhoneNumber.trim();
+  
+  if (localPhoneNumber.length() > 0 && localPhoneNumber != "未知号码") {
+    logCaptureLn(String("✓ 成功更新本机号码: ") + localPhoneNumber);
+  } else {
+    localPhoneNumber = "未知号码";
+    logCaptureLn(String("⚠️ SIM卡内未写入号码"));
+  }
+}
+
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -103,23 +125,9 @@ void setup() {
   } else {
     logCaptureLn(String("eSIM初始化失败或未检测到eUICC芯片"));
   }
-  logCaptureLn(String("正在从SIM卡自动获取本机号码..."));
-String cnumResp = sendATCommand("AT+CNUM", 1500);
-int firstQuote = cnumResp.indexOf("\",\"");
-if (firstQuote != -1) {
-  int secondQuote = cnumResp.indexOf("\"", firstQuote + 3);
-  if (secondQuote != -1) {
-    localPhoneNumber = cnumResp.substring(firstQuote + 3, secondQuote);
-  }
-}
-localPhoneNumber.replace("NonNull", "");
-localPhoneNumber.trim();
-if (localPhoneNumber.length() > 0 && localPhoneNumber != "未知号码") {
-  logCaptureLn(String("✓ 成功获取并固化本机号码: ") + localPhoneNumber);
-} else {
-  localPhoneNumber = "未知号码";
-  logCaptureLn(String("⚠️ SIM卡内未写入号码"));
-}
+  // 获取手机号
+  refreshLocalPhoneNumber();
+  
   // 2. 给模组 5-8 秒的注网和获取 IP 的缓冲时间
   for (int i = 0; i < 8; i++) {
     server.handleClient(); // 保持网页能正常访问
@@ -163,6 +171,12 @@ if (localPhoneNumber.length() > 0 && localPhoneNumber != "未知号码") {
 
 void loop() {
   server.handleClient();
+  // ============ 【新增】：非阻塞后台刷新号码 ============
+  if (pendingSimRefreshTime > 0 && millis() > pendingSimRefreshTime) {
+    pendingSimRefreshTime = 0; // 闹钟响了，先把闹钟关掉
+    refreshLocalPhoneNumber(); // 触发重新获取号码！
+  }
+  
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {
       lastPrintTime = millis();

@@ -3,7 +3,7 @@
 #include "web_handlers.h"
 
 #include <ctype.h>
-
+unsigned long pendingSimRefreshTime = 0;
 #if ESIM_PROFILE_LOG
 #define ESIM_PROFILE_LOG_LN(expr) logCaptureLn(expr)
 #else
@@ -859,7 +859,12 @@ static bool profileOperation(uint32_t outerTag, const char* idText, bool refresh
 }
 
 bool esimEnableProfile(const char* iccidOrAid) {
-  return profileOperation(0xBF31, iccidOrAid, true, true);
+  if (profileOperation(0xBF31, iccidOrAid, true, true)) {
+    logCaptureLn("启用配置成功，网页端立即放行，4秒后后台自动刷新号码...");
+    pendingSimRefreshTime = millis() + 4000; // 设置后台闹钟
+    return true;
+  }
+  return false;
 }
 
 bool esimDisableProfile(const char* iccidOrAid) {
@@ -871,27 +876,31 @@ bool esimDeleteProfile(const char* iccidOrAid) {
 }
 
 bool esimSwitchProfile(const char* iccidOrAid) {
+  bool ok = false;
   if (profileOperation(0xBF31, iccidOrAid, true, true)) {
-    return true;
-  }
-
-  if (s_lastProfileResult == 5) {
+    ok = true;
+  } else if (s_lastProfileResult == 5) {
     logCaptureLn(String("eSIM 切换返回 CAT busy，改用 refresh=false 重试"));
     if (profileOperation(0xBF31, iccidOrAid, false, true)) {
       logCaptureLn(String("eSIM 无刷新切换成功，可能需要重启模组/重新注册网络后生效"));
-      return true;
+      ok = true;
+    } else if (s_lastProfileResult == 5) {
+      logCaptureLn(String("eSIM 仍返回 CAT busy，改用 lpac 兼容格式 refresh=false 重试"));
+      if (profileOperation(0xBF31, iccidOrAid, false, true, true)) {
+        logCaptureLn(String("eSIM lpac兼容格式切换成功，可能需要重启模组/重新注册网络后生效"));
+        ok = true;
+      }
     }
   }
 
-  if (s_lastProfileResult == 5) {
-    logCaptureLn(String("eSIM 仍返回 CAT busy，改用 lpac 兼容格式 refresh=false 重试"));
-    if (profileOperation(0xBF31, iccidOrAid, false, true, true)) {
-      logCaptureLn(String("eSIM lpac兼容格式切换成功，可能需要重启模组/重新注册网络后生效"));
-      return true;
-    }
+  // ============ 【核心新增】：切卡成功后重新抓取手机号 ============
+  if (ok) {
+logCaptureLn("切卡指令已发送，网页端立即放行，4秒后后台自动刷新号码...");
+  pendingSimRefreshTime = millis() + 4000; // 设定一个 4 秒后的后台闹钟
   }
+  // =============================================================
 
-  return false;
+  return ok;
 }
 
 bool esimGetNotificationCount(int* count) {
