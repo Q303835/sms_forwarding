@@ -101,7 +101,7 @@ static void appendPushTypeOptions(String& html, PushType current) {
   html += pushTypeOption(PUSH_TYPE_DINGTALK, "钉钉机器人", current);
   html += pushTypeOption(PUSH_TYPE_PUSHPLUS, "PushPlus", current);
   html += pushTypeOption(PUSH_TYPE_SERVERCHAN, "Server酱", current);
-  html += pushTypeOption(PUSH_TYPE_CUSTOM, "自定义模板", current);
+  html += pushTypeOption(PUSH_TYPE_CUSTOM, "自定义模板（POST）", current);
   html += pushTypeOption(PUSH_TYPE_FEISHU, "飞书机器人", current);
   html += pushTypeOption(PUSH_TYPE_GOTIFY, "Gotify", current);
   html += pushTypeOption(PUSH_TYPE_TELEGRAM, "Telegram Bot", current);

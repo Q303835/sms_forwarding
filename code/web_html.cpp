@@ -548,7 +548,16 @@ const char* htmlPage = R"rawliteral(
       else if (type == 6) { hint.innerHTML = 'Server酱<br>填写 SendKey，URL 留空使用默认'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='SendKey'; document.getElementById('key1'+idx).placeholder='SCT...'; }
       else if (type == 7) { hint.innerHTML = '自定义模板<br>使用 {sender} {message} {timestamp} 占位符'; custom.style.display='block'; }
       else if (type == 8) { hint.innerHTML = '飞书机器人<br>填写 Webhook 地址，签名验证需填 Secret'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
-      else if (type == 9) { hint.innerHTML = 'Gotify<br>填写服务器地址 + 应用 Token'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; document.getElementById('key1'+idx).placeholder='A...'; }
+      else if (type == 9) { 
+        hint.innerHTML = 'Gotify<br>填写 Webhook 地址 + Token + 优先级'; 
+        extra.style.display='block'; 
+        document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; 
+        document.getElementById('key1'+idx).placeholder='A...'; 
+        // 开启 key2 用于填写优先级
+        if(kg) kg.style.display='block'; 
+        document.getElementById('key2label'+idx).innerText='通知优先级 (0-9，不填默认5)'; 
+        document.getElementById('key2'+idx).placeholder='例如: 8'; 
+      }
       else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
     }
     document.addEventListener('DOMContentLoaded', function() {

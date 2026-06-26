@@ -193,8 +193,38 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       break;
     }
 
-    case PUSH_TYPE_GOTIFY: {
+   case PUSH_TYPE_GOTIFY: {
       // Gotify 推送
+      String gotifyUrl = channel.url;
+      // 确保URL以/结尾
+      if (!gotifyUrl.endsWith("/")) gotifyUrl += "/";
+      gotifyUrl += "message?token=" + channel.key1;
+
+      // --- 核心新增：智能解析用户自定义的优先级 ---
+      int priority = 5; // 默认值设为 5
+      
+      // 检查用户输入的原始 URL 中是否包含类似 &priority=8 或 ?priority=8 的设定
+      int pIdx = channel.url.indexOf("priority=");
+      if (pIdx != -1) {
+        // 截取数字并转换为整数
+        String pStr = channel.url.substring(pIdx + 9);
+        int val = pStr.toInt();
+        if (val >= 1 && val <= 10) { // 限制在 Gotify 合理的 1-10 范围内
+          priority = val;
+        }
+      }
+      // ----------------------------------------
+
+      http.begin(gotifyUrl);
+      http.addHeader("Content-Type", "application/json");
+      String jsonData = "{";
+      jsonData += "\"title\":\"短信来自: " + senderEscaped + "\",";
+      jsonData += "\"message\":\"" + messageEscaped + "\\n\\n时间: " + timestampEscaped + "\",";
+      jsonData += "\"priority\":" + String(priority); // 动态填入优先级
+      jsonData += "}";
+
+      logCaptureLn(String("Gotify: " + jsonData));
+      httpCode = http.POST(jsonData);
       break;
     }
 
