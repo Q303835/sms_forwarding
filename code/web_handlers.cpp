@@ -111,43 +111,18 @@ static bool isValidPushType(int typeVal) {
   return typeVal >= PUSH_TYPE_POST_JSON && typeVal <= PUSH_TYPE_TELEGRAM;
 }
 
-// 处理配置页面请求
+// 处理配置页面请求 (终极分块传输版，彻底解决内存碎片)
 void handleRoot() {
   if (!checkAuth()) return;
   
-  String html = String(htmlPage);
-  html.replace("%IP%", WiFi.localIP().toString());
-  html.replace("%WIFI_SSID%", String(WiFi.SSID()));
-  html.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
-  long uptimeSec = millis() / 1000;
-  char uptimeBuf[16];
-  snprintf(uptimeBuf, sizeof(uptimeBuf), "%ld:%02ld:%02ld", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
-  html.replace("%UPTIME%", String(uptimeBuf));
-  html.replace("%WEB_USER%", config.webUser);
-  html.replace("%WEB_PASS%", config.webPass);
-  html.replace("%SMTP_SERVER%", config.smtpServer);
-  html.replace("%SMTP_PORT%", String(config.smtpPort));
-  html.replace("%SMTP_USER%", config.smtpUser);
-  html.replace("%SMTP_PASS%", config.smtpPass);
-  html.replace("%SMTP_SEND_TO%", config.smtpSendTo);
-  html.replace("%ADMIN_PHONE%", config.adminPhone);
-  html.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
-  html.replace("%PROXY_MODE_0%", config.esimProxyMode == 0 ? "selected" : "");
-  html.replace("%PROXY_MODE_1%", config.esimProxyMode == 1 ? "selected" : "");
-  html.replace("%PROXY_MODE_2%", config.esimProxyMode == 2 ? "selected" : "");
-  html.replace("%ESIM_PROXY_URL%", htmlEscape(config.esimProxyUrl));
-
-
+  // 1. 提取动态获取 WiFi 选项的逻辑
   String wifiOptions = "";
-  
-if (WiFi.status() == WL_CONNECTED && WiFi.getMode() == WIFI_STA) {
+  if (WiFi.status() == WL_CONNECTED && WiFi.getMode() == WIFI_STA) {
     String currentSsid = WiFi.SSID();
     wifiOptions += "<option value=\"" + htmlEscape(currentSsid) + "\" selected>";
     wifiOptions += htmlEscape(currentSsid) + " (已连接 - 信号: " + String(WiFi.RSSI()) + " dBm)</option>";
     wifiOptions += "<option value=\"\">[提示：若需重新配网，请将设备带离当前无线区域或断开路由器]</option>";
-  } 
-  else {
-    logCaptureLn("处于配网热点状态下，正在扫描周围 WiFi 信号...");
+  } else {
     int n = WiFi.scanNetworks();
     if (n == 0) {
       wifiOptions += "<option value=''>未扫描到任何无线网络</option>";
@@ -163,90 +138,116 @@ if (WiFi.status() == WL_CONNECTED && WiFi.getMode() == WIFI_STA) {
     WiFi.scanDelete();
   }
 
-  // 渲染到前端
-  html.replace("%WIFI_SELECT_OPTIONS%", wifiOptions);
-  html.replace("%WIFI_PASS_VAL%", String(WIFI_PASS)); // 改为直接拿原有的宏定义
-  // ====================================================================
-  // ====================================================================
-
-  // 概览页面的配置状态
+  // 2. 准备概览页面的状态数据
   bool emailOk = config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
                  config.smtpPass.length() > 0 && config.smtpSendTo.length() > 0;
-  html.replace("%SMTP_CHECK%", emailOk ? "已配置" : "未配置");
-  html.replace("%MODEM_CHECK%", modemReady ? "已就绪" : "未就绪");
   int pushCount = 0;
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (config.pushChannels[i].enabled) pushCount++;
   }
-  html.replace("%PUSH_COUNT%", String(pushCount));
-  html.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
+  long uptimeSec = millis() / 1000;
+  char uptimeBuf[16];
+  snprintf(uptimeBuf, sizeof(uptimeBuf), "%ld:%02ld:%02ld", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
+
+  // ==========================================
+  // 【核心黑科技：流式分块传输】
+  // ==========================================
   
-  // 生成推送通道HTML
-  String channelsHtml = "";
-  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
-    const PushChannel& ch = config.pushChannels[i];
-    String idx = String(i);
-    String enabledClass = ch.enabled ? " enabled" : "";
-    String checked = ch.enabled ? " checked" : "";
-    String nameEsc = htmlEscape(ch.name);
-    String urlEsc = htmlEscape(ch.url);
-    String key1Esc = htmlEscape(ch.key1);
-    String key2Esc = htmlEscape(ch.key2);
-    String bodyEsc = htmlEscape(ch.customBody);
-    
-    channelsHtml += "<div class=\"push-channel" + enabledClass + "\" id=\"channel" + idx + "\">";
-    channelsHtml += "<div class=\"push-channel-header\">";
-    channelsHtml += "<input type=\"checkbox\" name=\"push" + idx + "en\" id=\"push" + idx + "en\" onchange=\"toggleChannel(" + idx + ")\"" + checked + ">";
-    channelsHtml += "<label for=\"push" + idx + "en\" class=\"label-inline\">启用推送通道 " + String(i + 1) + "</label>";
-    channelsHtml += "</div>";
-    channelsHtml += "<div class=\"push-channel-body\">";
-    
-    // 通道名称
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>通道名称</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + nameEsc + "\" placeholder=\"自定义名称\">";
-    channelsHtml += "</div>";
-    
-    // 推送类型（须与 updateTypeHint 及 PushType 枚举一致）
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>推送方式</label>";
-    channelsHtml += "<select name=\"push" + idx + "type\" id=\"push" + idx + "type\" onchange=\"updateTypeHint(" + idx + ")\">";
-    appendPushTypeOptions(channelsHtml, ch.type);
-    channelsHtml += "</select>";
-    channelsHtml += "<div class=\"push-type-hint\" id=\"hint" + idx + "\"></div>";
-    channelsHtml += "</div>";
-    
-    // URL
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>推送URL/Webhook</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" value=\"" + urlEsc + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
-    channelsHtml += "</div>";
-    
-    // 额外参数区域（钉钉/PushPlus/Server酱等需要）
-    channelsHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\">";
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label id=\"key1label" + idx + "\">参数1</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + key1Esc + "\">";
-    channelsHtml += "</div>";
-    channelsHtml += "<div class=\"form-group\" id=\"key2group" + idx + "\">";
-    channelsHtml += "<label id=\"key2label" + idx + "\">参数2</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + key2Esc + "\">";
-    channelsHtml += "</div>";
-    channelsHtml += "</div>";
-    
-    // 自定义模板区域
-    channelsHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\">";
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>请求体模板（使用 {sender} {message} {timestamp} 占位符）</label>";
-    channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + bodyEsc + "</textarea>";
-    channelsHtml += "</div>";
-    channelsHtml += "</div>";
-    
-    channelsHtml += "</div></div>";
+  // 找到占位符在原始常量字符串中的物理位置
+  const char* pushMarker = "%PUSH_CHANNELS%";
+  const char* markerPtr = strstr(htmlPage, pushMarker);
+
+  if (!markerPtr) {
+      server.send(500, "text/plain", "HTML Template Error: PUSH_CHANNELS marker not found.");
+      return;
   }
-  html.replace("%PUSH_CHANNELS%", channelsHtml);
+
+  // 告诉浏览器：我们要分块发数据了，不要等 Content-Length
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+
+  // --- 第一部分：复制并发送占位符【之前】的 HTML ---
+  size_t part1Len = markerPtr - htmlPage;
+  String htmlPart1;
+  htmlPart1.reserve(part1Len + 2048); // 安全包场，防止溢出
+  for(size_t i = 0; i < part1Len; i++) {
+      htmlPart1 += htmlPage[i];
+  }
+
+  // 执行上半部分的变量替换
+  htmlPart1.replace("%IP%", WiFi.localIP().toString());
+  htmlPart1.replace("%WIFI_SSID%", String(WiFi.SSID()));
+  htmlPart1.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
+  htmlPart1.replace("%UPTIME%", String(uptimeBuf));
+  htmlPart1.replace("%WEB_USER%", config.webUser);
+  htmlPart1.replace("%WEB_PASS%", config.webPass);
+  htmlPart1.replace("%SMTP_SERVER%", config.smtpServer);
+  htmlPart1.replace("%SMTP_PORT%", String(config.smtpPort));
+  htmlPart1.replace("%SMTP_USER%", config.smtpUser);
+  htmlPart1.replace("%SMTP_PASS%", config.smtpPass);
+  htmlPart1.replace("%SMTP_SEND_TO%", config.smtpSendTo);
+  htmlPart1.replace("%WIFI_SELECT_OPTIONS%", wifiOptions);
+  htmlPart1.replace("%WIFI_PASS_VAL%", String(WIFI_PASS));
+  htmlPart1.replace("%SMTP_CHECK%", emailOk ? "已配置" : "未配置");
+  htmlPart1.replace("%MODEM_CHECK%", modemReady ? "已就绪" : "未就绪");
+  htmlPart1.replace("%PUSH_COUNT%", String(pushCount));
+  htmlPart1.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
+  htmlPart1.replace("%ADMIN_PHONE%", config.adminPhone); 
+
+  server.sendContent(htmlPart1); // 发送上半部分到网络
+  htmlPart1 = ""; // 立刻释放内存！极其关键！
+
+  // --- 第二部分：边生成边发送推送通道 (不占用堆内存) ---
+  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+      String chHtml = "";
+      chHtml.reserve(2048);
+      const PushChannel& ch = config.pushChannels[i];
+      String idx = String(i);
+      String enabledClass = ch.enabled ? " enabled" : "";
+      String checked = ch.enabled ? " checked" : "";
+      
+      chHtml += "<div class=\"push-channel" + enabledClass + "\" id=\"channel" + idx + "\">";
+      chHtml += "<div class=\"push-channel-header\">";
+      chHtml += "<input type=\"checkbox\" name=\"push" + idx + "en\" id=\"push" + idx + "en\" onchange=\"toggleChannel(" + idx + ")\"" + checked + ">";
+      chHtml += "<label for=\"push" + idx + "en\" class=\"label-inline\">启用推送通道 " + String(i + 1) + "</label>";
+      chHtml += "</div>";
+      chHtml += "<div class=\"push-channel-body\">";
+      
+      chHtml += "<div class=\"form-group\"><label>通道名称</label>";
+      chHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + htmlEscape(ch.name) + "\" placeholder=\"自定义名称\"></div>";
+      
+      chHtml += "<div class=\"form-group\"><label>推送方式</label>";
+      chHtml += "<select name=\"push" + idx + "type\" id=\"push" + idx + "type\" onchange=\"updateTypeHint(" + idx + ")\">";
+      appendPushTypeOptions(chHtml, ch.type);
+      chHtml += "</select><div class=\"push-type-hint\" id=\"hint" + idx + "\"></div></div>";
+      
+      chHtml += "<div class=\"form-group\"><label>推送URL/Webhook</label>";
+      chHtml += "<input type=\"text\" name=\"push" + idx + "url\" value=\"" + htmlEscape(ch.url) + "\" placeholder=\"http://your-server.com/api 或 webhook地址\"></div>";
+      
+      chHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\"><div class=\"form-group\">";
+      chHtml += "<label id=\"key1label" + idx + "\">参数1</label><input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + htmlEscape(ch.key1) + "\"></div>";
+      chHtml += "<div class=\"form-group\" id=\"key2group" + idx + "\"><label id=\"key2label" + idx + "\">参数2</label>";
+      chHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + htmlEscape(ch.key2) + "\"></div></div>";
+      
+      chHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\"><div class=\"form-group\">";
+      chHtml += "<label>请求体模板（使用 {sender} {message} {timestamp} 占位符）</label>";
+      chHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + htmlEscape(ch.customBody) + "</textarea></div></div>";
+      
+      chHtml += "</div></div>";
+      
+      server.sendContent(chHtml); // 单个通道拼完就立刻发给浏览器！
+  }
+
+  // --- 第三部分：复制并发送占位符【之后】的 HTML ---
+  String htmlPart2 = String(markerPtr + strlen(pushMarker));
+  htmlPart2.replace("%ADMIN_PHONE%", config.adminPhone);
+  htmlPart2.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
+  htmlPart2.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
+
+  server.sendContent(htmlPart2);
   
-  server.send(200, "text/html", html);
+  // 发送结束标志，通知浏览器页面加载完毕
+  server.sendContent("");
 }
 
 // 处理工具箱页面请求 — 已整合到主页，直接返回主页
