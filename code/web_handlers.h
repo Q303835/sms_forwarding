@@ -28,5 +28,6 @@ void handleLog();
 void handleModem();
 void handleWifi();
 void handleESim();
+void handleSetAutoSms();
 
 #endif

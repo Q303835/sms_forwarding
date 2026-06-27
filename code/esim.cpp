@@ -1431,3 +1431,58 @@ bool esimProcessNotifications(String& outputLog) {
   free(resp);
   return true;
 }
+
+bool esimSetNickname(const char* iccidOrAid, const char* nickname) {
+  if (!nickname) {
+    setError("昵称不能为空");
+    return false;
+  }
+
+  // 1. 获取包含标签的 ICCID 结构 (Tag 0x5A)
+  uint8_t idTlv[24];
+  size_t idTlvLen = 0;
+  if (!buildProfileIdentifier(iccidOrAid, idTlv, sizeof(idTlv), &idTlvLen)) return false;
+
+  // 2. 构造整个请求的内容体 (Value)
+  uint8_t value[128];
+  size_t valueLen = 0;
+  
+  // 放入 Profile 标识 (ICCID)
+  memcpy(value + valueLen, idTlv, idTlvLen);
+  valueLen += idTlvLen;
+  
+  // 放入新昵称，昵称的 ASN.1 标签是 0x90 (UTF8String)
+  appendTlv(value, &valueLen, 0x90, (const uint8_t*)nickname, strlen(nickname));
+
+  // 3. 组装最终的 SetNicknameRequest (修正 Tag 为 0xBF29)
+  uint8_t request[160];
+  size_t pos = 0;
+  appendTlv(request, &pos, 0xBF29, value, valueLen);
+
+  // 4. 发送 APDU 命令
+  uint8_t* resp = NULL;
+  size_t respLen = 0;
+  if (!es10xCommand(request, pos, &resp, &respLen)) return false;
+
+  // 5. 解析响应结果 (外层 Tag 也是 0xBF29，返回值标签 0x80)
+  TlvNode top, resultNode;
+  bool parsed = readTlv(resp, respLen, 0, &top) &&
+                top.tag == 0xBF29 &&
+                findChildTag(top.value, top.length, 0x80, &resultNode);
+                
+  int ret = parsed ? (int)parseInteger(resultNode.value, resultNode.length) : -1;
+  free(resp);
+
+  if (!parsed) {
+    setError("无法解析设置昵称响应");
+    return false;
+  }
+  
+  if (ret != 0) {
+    setError("设置昵称失败，卡片拒绝修改");
+    return false;
+  }
+
+  logCaptureLn("eSIM 别名修改成功！");
+  return true;
+}

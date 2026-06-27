@@ -32,6 +32,73 @@ void refreshLocalPhoneNumber() {
     logCaptureLn(String("⚠️ SIM卡内未写入号码"));
   }
 }
+// ================= 自动保号后台检查任务 =================
+void checkAutoSMSLoop() {
+    // 1. 如果没开启功能，直接返回
+    if (!config.autoSms.enabled) return;
+
+    // 2. 节流防抖：每 12 小时检查一次即可
+    static unsigned long lastCheckTime = 0;
+    // 12小时 = 12 * 60 * 60 * 1000 = 43200000 毫秒 (加上 UL 防止溢出)
+    if (millis() - lastCheckTime < 43200000UL) return; 
+    lastCheckTime = millis();
+
+    // 3. 获取当前 Unix 时间戳
+    time_t now;
+    time(&now); 
+
+    // 4. 防御性检查：如果 ESP32 还没通过网络/基站对准时间（比如时间还在 2024 年以前），则暂不执行
+    if (now < 1704067200) return; 
+
+    uint32_t intervalSeconds = (uint32_t)config.autoSms.intervalDays * 86400; // 转换成秒
+
+    // 5. 初次开启保护：如果是第一次开启，把当前时间记作“上次发送时间”
+    if (config.autoSms.lastSentTime == 0) {
+        config.autoSms.lastSentTime = now;
+        saveConfig();
+        logCaptureLn("【自动保号】已初始化上次发信时间为当前时间。");
+        return;
+    }
+
+    // 6. 核心触发逻辑：当前时间 - 上次发送时间 >= 设定的间隔时间
+    if ((uint32_t)now - config.autoSms.lastSentTime >= intervalSeconds) {
+        logCaptureLn("【自动保号】到达设定的保号期限，开始发送保号短信...");
+        
+        // 调用底层的发短信函数
+        bool success = sendSMS(config.autoSms.targetNumber, config.autoSms.message);
+        
+        if (success) {
+            logCaptureLn("【自动保号】短信发送成功，已重置计时器。");
+            config.autoSms.lastSentTime = now; // 更新时间戳
+            saveConfig();                      // 保存到闪存
+            // ================= 新增：触发通道推送 =================
+            // 1. 获取本机号码（加个防空判断，如果读不到就显示未知）
+            String myNum = localPhoneNumber;
+            if (myNum.length() == 0 || myNum == "未知号码") {
+                myNum = "未知号码";
+            }
+
+            // 2. 拼接带有本机号码的专属标题
+            String pushTitle = "🔄 " + myNum + " 自动保号成功";
+
+            // 3. 拼接详细内容
+            String pushContent = "设备已自动执行定期保号任务。\n";
+            pushContent += "本机号码：" + myNum + "\n";
+            pushContent += "目标号码：" + String(config.autoSms.targetNumber) + "\n";
+            pushContent += "发送内容：" + String(config.autoSms.message) + "\n";
+            pushContent += "下次保号：" + String(config.autoSms.intervalDays) + " 天后。";
+
+            // 这里将标题作为发送者名称传进去，这样在某些通道（如TG/Gotify）里显示更清晰
+            sendSMSToServer(pushTitle.c_str(), pushContent.c_str(), "");
+            
+            // 5. 触发邮件通知
+            sendEmailNotification(pushTitle.c_str(), pushContent.c_str());
+        } else {
+            logCaptureLn("【自动保号】短信发送失败，将在下次循环继续重试。");
+        }
+    }
+}
+
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -106,6 +173,7 @@ void setup() {
   server.on("/modem", handleModem);
   server.on("/wifi", handleWifi);
   server.on("/esim", handleESim);
+  server.on("/api/set_autosms", HTTP_POST, handleSetAutoSms);
   server.begin();
   logCaptureLn(String("HTTP服务器已启动"));
 
@@ -181,4 +249,5 @@ void loop() {
   checkConcatTimeout();
   handleSerialConsole();
   checkSerial1URC();
+  checkAutoSMSLoop(); // 自动保号后台检查任务
 }

@@ -17,6 +17,14 @@ void saveConfig() {
   preferences.putString("wifiPass", config.wifiPass);
   preferences.putInt("esimProxyMode", config.esimProxyMode);
   preferences.putString("esimProxyUrl", config.esimProxyUrl);
+  // 保存自动保号配置 (键名严格限制在15字符以内)
+  preferences.putBool("as_en", config.autoSms.enabled);
+  preferences.putUInt("as_time", config.autoSms.lastSentTime);
+  preferences.putUShort("as_days", config.autoSms.intervalDays);
+  
+  // 因为你在结构体里定义的是 char 数组，保存时要转成 String
+  preferences.putString("as_tgt", String(config.autoSms.targetNumber));
+  preferences.putString("as_msg", String(config.autoSms.message));
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String prefix = "push" + String(i);
@@ -50,6 +58,17 @@ void loadConfig() {
   config.esimProxyMode = preferences.getInt("esimProxyMode", 1); 
   config.esimProxyUrl = preferences.getString("esimProxyUrl", "");
   // 加载推送通道配置
+  // 读取自动保号配置，逗号后面的是默认值（如果找不到数据就用默认值）
+    config.autoSms.enabled = preferences.getBool("as_en", false);
+    config.autoSms.lastSentTime = preferences.getUInt("as_time", 0);
+    config.autoSms.intervalDays = preferences.getUShort("as_days", 80);
+    
+    // 读取字符串并安全复制回你的 char 数组中
+    String target = preferences.getString("as_tgt", "");
+    strncpy(config.autoSms.targetNumber, target.c_str(), sizeof(config.autoSms.targetNumber) - 1);
+    
+    String msg = preferences.getString("as_msg", "Keepalive");
+    strncpy(config.autoSms.message, msg.c_str(), sizeof(config.autoSms.message) - 1);
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String prefix = "push" + String(i);
     config.pushChannels[i].enabled = preferences.getBool((prefix + "en").c_str(), false);

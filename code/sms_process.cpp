@@ -100,7 +100,9 @@ void checkConcatTimeout() {
   unsigned long now = millis();
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     if (concatBuffer[i].inUse) {
-      if (now - concatBuffer[i].firstPartTime >= CONCAT_TIMEOUT_MS) {
+      // ============ 【核心修复】：强行将超时等待设定为 30000 毫秒（30秒）============
+      // 防止因为宏定义错误（如错填成30）导致的瞬间超时
+      if (now - concatBuffer[i].firstPartTime >= 30000UL) {
         logCaptureLn(String("⏰ 长短信超时，强制转发不完整消息"));
         logCaptureF("  参考号: %d, 已收到: %d/%d\n", 
                       concatBuffer[i].refNumber,
@@ -118,6 +120,7 @@ void checkConcatTimeout() {
         // 清空槽位
         clearConcatSlot(i);
       }
+      // =========================================================================
     }
   }
 }
@@ -257,6 +260,86 @@ void processAdminCommand(const char* sender, const char* text) {
   }
 }
 
+// 辅助函数：统一的验证码黑名单校验
+bool isCodeValid(const String& code) {
+    if (code == "10086" || code == "10010" || code == "10000" || code == "12306") return false;
+    if (code.startsWith("955")) return false; // 银行客服
+    if (code.startsWith("106")) return false; // 短信平台
+    return true;
+}
+
+// 辅助函数：双阶段智能提取验证码
+String extractVerifyCode(String smsStr) {
+    // ---------- 第一阶段：关键字附近查找 (扩大搜索窗口) ----------
+    const char *keywords[] = {
+        "验证码", "校验码", "动态码", "动态密码",
+        "verification code", "Verification Code", 
+        "verification", "code", "Code", "OTP", "otp"
+    };
+
+    for (int k = 0; k < sizeof(keywords) / sizeof(keywords[0]); k++) {
+        int pos = smsStr.indexOf(keywords[k]);
+
+        if (pos != -1) {
+            // 核心修改：不仅向后找 40 个字符，也向前找 15 个字符。使用三元运算符避免 max/min 宏报错
+            int startPos = (pos - 15 > 0) ? (pos - 15) : 0;
+            int endPos = (pos + 40 < (int)smsStr.length()) ? (pos + 40) : (int)smsStr.length();
+            int numStart = -1;
+
+            for (int i = startPos; i <= endPos; i++) {
+                char c = (i < smsStr.length()) ? smsStr.charAt(i) : ' ';
+
+                if (c >= '0' && c <= '9') {
+                    if (numStart == -1) numStart = i;
+                } else {
+                    if (numStart != -1) {
+                        String code = smsStr.substring(numStart, i);
+                        // 在第一阶段也加入黑名单校验
+                        if (code.length() >= 4 && code.length() <= 8 && isCodeValid(code)) {
+                            return code;
+                        }
+                        numStart = -1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------- 第二阶段：全局搜索兜底 ----------
+    int numCount = 0;
+    int startIdx = 0;
+
+    for (int i = 0; i <= smsStr.length(); i++) {
+        char c = (i < smsStr.length()) ? smsStr.charAt(i) : ' ';
+
+        if (c >= '0' && c <= '9') {
+            if (numCount == 0) startIdx = i;
+            numCount++;
+        } else {
+            if (numCount >= 4 && numCount <= 8) {
+                String code = smsStr.substring(startIdx, startIdx + numCount);
+
+                // 忽略短信前10个字符里的数字（通常是发送方号码拼接）
+                if (startIdx < 10) {
+                    numCount = 0;
+                    continue;
+                }
+
+                // 调用统一的黑名单校验
+                if (!isCodeValid(code)) {
+                    numCount = 0;
+                    continue;
+                }
+
+                return code;
+            }
+            numCount = 0;
+        }
+    }
+
+    return "";
+}
+
 // 处理最终的短信内容（管理员命令检查和转发）
 void processSmsContent(const char* sender, const char* text, const char* timestamp) {
   logCaptureLn(String("=== 处理短信内容 ==="));
@@ -287,24 +370,11 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   if (cleanPhone.length() == 0 || cleanPhone == "未知号码") {
     cleanPhone = "未知号码";
   }
+  // 提取短信中的验证码（采用双阶段智能提取）
   String codeTip = "";
-  String smsStr = String(text);
-  int numCount = 0;
-  int startIdx = -1;
-
-  for (unsigned int i = 0; i <= smsStr.length(); i++) {
-    char c = (i < smsStr.length()) ? smsStr.charAt(i) : ' '; 
-    if (c >= '0' && c <= '9') {
-      if (numCount == 0) startIdx = i;
-      numCount++;
-    } else {
-      if (numCount >= 4 && numCount <= 6) {
-        String potentialCode = smsStr.substring(startIdx, startIdx + numCount);
-        codeTip = "【验证码:" + potentialCode + "】";
-        break; 
-      }
-      numCount = 0;
-    }
+  String extractedCode = extractVerifyCode(String(text));
+  if (extractedCode.length() > 0) {
+    codeTip = "【验证码:" + extractedCode + "】";
   }
 
   String formattedTime = "";

@@ -193,7 +193,7 @@ void handleRoot() {
   htmlPart1.replace("%PUSH_COUNT%", String(pushCount));
   htmlPart1.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
   htmlPart1.replace("%ADMIN_PHONE%", config.adminPhone); 
-
+  
   server.sendContent(htmlPart1); // 发送上半部分到网络
   htmlPart1 = ""; // 立刻释放内存！极其关键！
 
@@ -243,7 +243,20 @@ void handleRoot() {
   htmlPart2.replace("%ADMIN_PHONE%", config.adminPhone);
   htmlPart2.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
   htmlPart2.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
-
+  htmlPart2.replace("%AUTO_SMS_ENABLED_CHECKED%", config.autoSms.enabled ? "checked" : "");
+  htmlPart2.replace("%AUTO_SMS_TARGET_NUMBER%", String(config.autoSms.targetNumber));
+  htmlPart2.replace("%AUTO_SMS_MESSAGE%", String(config.autoSms.message));
+  htmlPart2.replace("%AUTO_SMS_INTERVAL_DAYS%", String(config.autoSms.intervalDays));
+  // 将 Unix 时间戳转换为 YYYY-MM-DD 格式展示给前端
+  String lastDateStr = "";
+  if (config.autoSms.lastSentTime > 0) {
+      struct tm *ptm = localtime((time_t*)&config.autoSms.lastSentTime);
+      char buf[16];
+      // 格式化为 YYYY-MM-DD
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02d", ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday);
+      lastDateStr = String(buf);
+  }
+  htmlPart2.replace("%AUTO_SMS_LAST_SENT_DATE%", lastDateStr);
   server.sendContent(htmlPart2);
   
   // 发送结束标志，通知浏览器页面加载完毕
@@ -1397,6 +1410,18 @@ void handleESim() {
       message = esimGetLastError();
     }
   }
+  else if (action == "setnickname") {
+    String iccid = server.arg("iccid");
+    String nickname = server.arg("nickname");
+    logCaptureLn(String("网页端请求修改eSIM昵称: ") + iccid + " -> " + nickname);
+    
+    if (esimSetNickname(iccid.c_str(), nickname.c_str())) {
+      success = true;
+      message = "eSIM 昵称修改成功";
+    } else {
+      message = esimGetLastError();
+    }
+  }
   else if (action == "notifcount") {
     logCaptureLn(String("网页端查询eSIM通知数量..."));
     
@@ -1460,4 +1485,56 @@ void handleESim() {
   
   server.send(200, "application/json", json);
   busy = false;
+}
+// 处理自动保号配置保存请求
+void handleSetAutoSms() {
+  if (!checkAuth()) return; // 保持你项目的安全风格，先校验登录
+
+  // 1. 处理 Checkbox
+  config.autoSms.enabled = server.hasArg("autoSmsEnabled");
+
+  // 2. 处理目标号码
+  if (server.hasArg("autoSmsTargetNumber")) {
+      String target = server.arg("autoSmsTargetNumber");
+      strncpy(config.autoSms.targetNumber, target.c_str(), sizeof(config.autoSms.targetNumber) - 1);
+      config.autoSms.targetNumber[sizeof(config.autoSms.targetNumber) - 1] = '\0';
+  }
+
+  // 3. 处理短信内容
+  if (server.hasArg("autoSmsMessage")) {
+      String msg = server.arg("autoSmsMessage");
+      strncpy(config.autoSms.message, msg.c_str(), sizeof(config.autoSms.message) - 1);
+      config.autoSms.message[sizeof(config.autoSms.message) - 1] = '\0';
+  }
+
+  // 4. 处理间隔天数
+  if (server.hasArg("autoSmsIntervalDays")) {
+      config.autoSms.intervalDays = server.arg("autoSmsIntervalDays").toInt();
+  }
+
+  // 5. 处理上次发送日期 (将 YYYY-MM-DD 转换为 Unix 时间戳)
+  if (server.hasArg("autoSmsLastSentDate")) {
+      String dateStr = server.arg("autoSmsLastSentDate");
+      dateStr.trim();
+      
+      if (dateStr.length() == 10) { // 标准格式：YYYY-MM-DD
+          struct tm t = {0};
+          t.tm_year = dateStr.substring(0, 4).toInt() - 1900; // 年份从 1900 开始算
+          t.tm_mon  = dateStr.substring(5, 7).toInt() - 1;    // 月份从 0 开始算
+          t.tm_mday = dateStr.substring(8, 10).toInt();
+          t.tm_hour = 0; // 默认设为当日凌晨 0点
+          t.tm_min  = 0;
+          t.tm_sec  = 0;
+          
+          config.autoSms.lastSentTime = mktime(&t); // 转换回 Unix 时间戳
+      } else if (dateStr.length() == 0) {
+          config.autoSms.lastSentTime = 0; // 允许用户清空该字段
+      }
+  }
+
+  // 6. 保存配置到闪存
+  saveConfig();
+
+  // 7. 返回弹窗提示并返回上一页
+  server.send(200, "text/html", "<meta charset=\"UTF-8\"><script>alert('自动保号配置保存成功！');history.back();</script>");
 }

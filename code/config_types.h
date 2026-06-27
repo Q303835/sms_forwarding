@@ -31,7 +31,13 @@ struct PushChannel {
   String key2;            // 额外参数2（备用）
   String customBody;      // 自定义请求体模板（使用 {sender} {message} {timestamp} 占位符）
 };
-
+struct AutoSMSConfig {
+    bool enabled = false;          // 是否开启自动保号
+    uint32_t lastSentTime = 0;     // 上次发信时间 (Unix时间戳)
+    uint16_t intervalDays = 80;    // 间隔天数：80, 166, 355
+    char targetNumber[20] = "";    // 接收保号短信的号码（例如另一个境外号或国内号）
+    char message[32] = "Keepalive"; // 短信内容
+};
 // 配置参数结构体
 struct Config {
   String wifiSsid;
@@ -48,7 +54,9 @@ struct Config {
   String numberBlackList;  // 号码黑名单（换行符分隔）
   int esimProxyMode;   // 【新增】0=直连, 1=默认, 2=自建
   String esimProxyUrl; // 【新增】自建的URL地址
+  AutoSMSConfig autoSms;
 };
+
 
 // 默认Web管理账号密码
 #define DEFAULT_WEB_USER "admin"

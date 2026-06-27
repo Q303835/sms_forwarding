@@ -38,7 +38,6 @@ extern bool modemReady;
 extern unsigned long lastPrintTime;
 extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];
 extern String localPhoneNumber;
-// 声明刷新手机号函数
 void refreshLocalPhoneNumber();
 
 #endif

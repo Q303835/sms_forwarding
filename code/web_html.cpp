@@ -202,7 +202,7 @@ const char* htmlPage = R"rawliteral(
       <a data-panel="admin"><span class="ico">👤</span> <span>管理员 &amp; 黑名单</span></a>
       <div class="sidebar-divider"></div>
       <div class="sidebar-section-label">工具</div>
-      <a data-panel="sendsms"><span class="ico">📤</span> <span>发送短信</span></a>
+      <a data-panel="sendsms"><span class="ico">📤</span> <span>发送短信&自动保号</span></a>
       <a data-panel="diagnose"><span class="ico">📊</span> <span>模组诊断</span></a>
       <a data-panel="network"><span class="ico">🌐</span> <span>网络测试</span></a>
       <a data-panel="modem"><span class="ico">✈</span> <span>模组控制</span></a>
@@ -365,10 +365,53 @@ const char* htmlPage = R"rawliteral(
           <form action="/sendsms" method="POST" target="_self">
             <div class="form-group"><label class="form-label">目标号码</label><input class="form-input" type="text" name="phone" placeholder="13800138000" required></div>
             <div class="form-group"><label class="form-label">短信内容</label><textarea class="form-textarea" name="content" placeholder="输入短信内容..." required oninput="updateCount(this)"></textarea><p class="form-hint">已输入 <span id="charCount">0</span> 字符</p></div>
-            <button type="submit" class="btn btn-primary" style="padding:9px 18px;">发送短信</button>
+            <button type="submit" class="btn btn-primary" style="padding:10px 20px;">发送短信</button>
           </form>
         </div>
       </div>
+      <!-- ===== 自动保号配置 ===== -->
+    <div class="card">
+      <div class="card-header">🔄 SIM卡自动保号</div>
+      <div class="card-body">
+        <form action="/api/set_autosms" method="POST" id="autoSmsForm">
+          <div class="form-group" style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
+  <label class="form-label" style="margin-bottom: 0; cursor: pointer;" for="autoSmsEnabled">启用自动保号</label>
+  <input type="checkbox" id="autoSmsEnabled" name="autoSmsEnabled" value="1" %AUTO_SMS_ENABLED_CHECKED% style="width: 22px; height: 22px; cursor: pointer; accent-color: #0070f3;">
+      </div>
+          <div style="background: #f0f7ff; border: 1px solid #cce3ff; border-left: 4px solid #0070f3; padding: 10px 15px; border-radius: 4px; margin-bottom: 15px; font-size: 13px; color: #333; line-height: 1.6;">
+            💡 <strong>号码格式重要提示：</strong>为确保在国际漫游状态下能 100% 投递成功，请务必以 <code>+</code> 和 <strong>国家区号</strong> 开头：<br>
+            • 发给中国号码：<code>+86138...</code><br>
+            • 发给英国号码：<code>+447...</code>（注意：请去掉英国号码 07 最前面的 0）<br>
+            • 发给德国号码：<code>+491...</code>（注意：请去掉德国号码 01 最前面的 0）<br>
+            其他号码同理
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">目标号码</label>
+            <input class="form-input" type="text" name="autoSmsTargetNumber" value="%AUTO_SMS_TARGET_NUMBER%" placeholder="13800138000">
+          </div>
+          <div class="form-group">
+            <label class="form-label">短信内容</label>
+            <textarea class="form-textarea" name="autoSmsMessage" rows="4" placeholder="请输入短信内容">%AUTO_SMS_MESSAGE%</textarea>
+          </div>
+          <div class="form-group">
+          <label class="form-label">发送间隔（天）</label>
+          <input class="form-input" type="number" list="intervalOptions" name="autoSmsIntervalDays" value="%AUTO_SMS_INTERVAL_DAYS%" min="1" max="9999" placeholder="请选择或输入天数">
+          <datalist id="intervalOptions">
+            <option value="80" label="vodafone 推荐"></option>
+            <option value="166" label="Giffgaff 推荐"></option>
+            <option value="355" label="按年保号"></option>
+          </datalist>
+          </div>
+          <div class="form-group">
+            <label class="form-label">上次发送日期</label>
+            <input class="form-input" type="date" name="autoSmsLastSentDate" value="%AUTO_SMS_LAST_SENT_DATE%">
+          </div>
+          <button type="submit" class="btn btn-primary" style="padding:10px 20px;">保存配置</button>
+        </form>
+      </div>
+    </div>
+
     </div>
 
     <!-- ===== Diagnostics ===== -->
@@ -740,14 +783,21 @@ function esimAction(action){
                 var p=d.profiles[i];
                 var stateStr=p.state==1?'<span style="color:#4CAF50">已启用</span>':'<span style="color:#888">已禁用</span>';
                 html+='<tr><td>'+p.iccid+'</td><td>'+(p.nickname||'-')+'</td><td>'+stateStr+'</td>';
-                html+='<td>';
+                
+                html+='<td><div style="display: flex; gap: 6px; flex-wrap: nowrap; align-items: center; white-space: nowrap;">';
+                
                 if(p.state==1){
                   html+='<button class="btn btn-danger btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',false)">禁用</button>';
                 } else {
                   html+='<button class="btn btn-primary btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',true)">切换/启用</button>';
-                  html+=' <button class="btn btn-danger btn-sm" onclick="esimDelete(\''+p.iccid+'\')">删除</button>';
                 }
-                html+='</td></tr>';
+                var safeNick = encodeURIComponent(p.nickname || '');
+                html+='<button class="btn btn-secondary btn-sm" onclick="esimEditNickname(\''+p.iccid+'\', decodeURIComponent(\''+safeNick+'\'))">改名</button>';
+                if(p.state!=1){
+                  html+='<button class="btn btn-danger btn-sm" onclick="esimDelete(\''+p.iccid+'\')">删除</button>';
+                }
+                
+                html+='</div></td></tr>';
               }
               html+='</table>';
               document.getElementById('esimProfileList').innerHTML=html;
@@ -768,7 +818,35 @@ function esimAction(action){
         resultEl.textContent='请求失败: '+e;
       });
     }
-function esimEnableDisable(iccid, enable){
+      // 👇 新增的修改昵称前端逻辑
+    function esimEditNickname(iccid, currentNick) {
+      // 弹窗让用户输入新昵称
+      var newNick = prompt('请输入新的昵称 (ICCID: ' + iccid + ')\n留空或点击取消则不修改：', currentNick);
+      
+      // 如果用户取消或者没做修改，直接退出
+      if (newNick === null || newNick === currentNick) return;
+      
+      var resultEl = document.getElementById('esimListResult');
+      resultEl.className = 'result-box result-loading';
+      resultEl.innerHTML = '正在与卡片通信修改昵称，请稍候...';
+
+      fetch('/esim?action=setnickname&iccid=' + encodeURIComponent(iccid) + '&nickname=' + encodeURIComponent(newNick))
+        .then(function(rr){return rr.json()})
+        .then(function(d){
+          if(d.success){
+            alert('昵称修改成功！');
+            esimAction('list'); // 修改成功后自动刷新列表
+          } else {
+            resultEl.className = 'result-box result-error';
+            resultEl.innerHTML = '修改失败: ' + d.message;
+          }
+        }).catch(function(e){
+          resultEl.className = 'result-box result-error';
+          resultEl.textContent = '请求失败: ' + e;
+        });
+    }
+    // 👆 新增结束
+      function esimEnableDisable(iccid, enable){
       if(!confirm(enable?'确定要启用此eSIM配置吗？':'确定要禁用此eSIM配置吗？'))return;
       var action=enable?'switch':'disable';
       
