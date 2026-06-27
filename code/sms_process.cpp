@@ -281,8 +281,8 @@ String extractVerifyCode(String smsStr) {
         int pos = smsStr.indexOf(keywords[k]);
 
         if (pos != -1) {
-            // 核心修改：不仅向后找 40 个字符，也向前找 15 个字符。使用三元运算符避免 max/min 宏报错
-            int startPos = (pos - 15 > 0) ? (pos - 15) : 0;
+            // 核心修改：不仅向后找 40 个字符，也向前找 60 个字符。使用三元运算符避免 max/min 宏报错
+            int startPos = (pos - 60 > 0) ? (pos - 60) : 0;
             int endPos = (pos + 40 < (int)smsStr.length()) ? (pos + 40) : (int)smsStr.length();
             int numStart = -1;
 
@@ -317,14 +317,12 @@ String extractVerifyCode(String smsStr) {
             numCount++;
         } else {
             if (numCount >= 4 && numCount <= 8) {
-                String code = smsStr.substring(startIdx, startIdx + numCount);
 
-                // 忽略短信前10个字符里的数字（通常是发送方号码拼接）
-                if (startIdx < 10) {
-                    numCount = 0;
-                    continue;
+                if (startIdx > 0 && smsStr.charAt(startIdx - 1) == '+') { 
+                  numCount = 0;
+                  continue;
                 }
-
+                String code = smsStr.substring(startIdx, startIdx + numCount);
                 // 调用统一的黑名单校验
                 if (!isCodeValid(code)) {
                     numCount = 0;
