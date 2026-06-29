@@ -1,7 +1,7 @@
 #include "modem.h"
 #include "web_handlers.h"
 
-// 发送AT命令并获取响应
+// 发送AT命令并获取响应，普通通信
 String sendATCommand(const char* cmd, unsigned long timeout) {
   while (Serial1.available()) Serial1.read();
   Serial1.println(cmd);
@@ -33,11 +33,23 @@ void modemPowerCycle() {
 
   logCaptureLn(String("EN 拉低：关闭模组"));
   digitalWrite(MODEM_EN_PIN, LOW);
-  delay(1200);  // 关机时间给够
+  
+  // 1.2秒关机等待，加入微循环保持网页极速响应
+  unsigned long t1 = millis();
+  while(millis() - t1 < 1200) {
+    server.handleClient();
+    delay(10);
+  }
 
   logCaptureLn(String("EN 拉高：开启模组"));
   digitalWrite(MODEM_EN_PIN, HIGH);
-  delay(6000);  // 等模组完全启动再发AT（关键）
+  
+  // 6秒开机等待，加入微循环保持网页极速响应
+  unsigned long t2 = millis();
+  while(millis() - t2 < 6000) {
+    server.handleClient();
+    delay(10);
+  }
 }
 
 // 重启模组（EN引脚断电重启 + 重新初始化）
@@ -49,9 +61,9 @@ void resetModule() {
 
 // 模组 AT 初始化流程（setup 中调用，resetModule 后也调用）
 void modemInit() {
-  localPhoneNumber = "";
-  // 清掉上电噪声/残留
-  while (Serial1.available()) Serial1.read();
+  localPhoneNumber = "";// 清空本地号码缓存
+
+  while (Serial1.available()) Serial1.read();  // 清掉上电噪声/残留
 
   while (!sendATandWaitOK("AT", 1000)) {
     logCaptureLn(String("AT未响应，重试..."));
@@ -114,9 +126,14 @@ void modemInit() {
     ceregRetry++;
     blink_short();
   }
-  if (ceregRetry < 30) {
+if (ceregRetry < 30) {
     logCaptureLn(String("网络已注册"));
     modemReady = true;
+    
+    // 模组每次初始化并注册网络成功后，自动抓取最新的本机号码！
+    extern void refreshLocalPhoneNumber(); // 声明外部函数
+    refreshLocalPhoneNumber(); 
+    
   } else {
     logCaptureLn(String("⚠️ 网络注册超时（无SIM卡或信号差），模组功能不可用"));
     modemReady = false;

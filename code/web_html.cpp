@@ -493,27 +493,6 @@ const char* htmlPage = R"rawliteral(
       <h1 class="page-title">eSIM 管理</h1>
       <p class="page-subtitle">管理 eUICC 芯片上的 eSIM 配置文件</p>
 
-      <form action="/save" method="POST">
-      <div class="card">
-        <div class="card-header">⚙️ 通知上报通信方式</div>
-        <div class="card-body">
-          <div class="form-group">
-            <label class="form-label">选择与运营商(RSP)通信的模式</label>
-            <select class="form-select" name="esimProxyMode" id="esimProxyMode" onchange="toggleProxyUrl()">
-              <option value="1" %PROXY_MODE_1%>🌐 使用默认代理 (推荐，公益服务器，如果失败请尝试自建)</option>
-              <option value="2" %PROXY_MODE_2%>🛠️ 用户自建代理 (使用自己的 PHP 服务)</option>
-              <option value="0" %PROXY_MODE_0%>⚡ 直接连接 (警告：可能因无 SNI 或证书校验失败)</option>
-            </select>
-          </div>
-          <div class="form-group" id="customProxyGroup" style="display:none;">
-            <label class="form-label">自建代理地址 (Proxy URL)</label>
-            <input class="form-input" type="text" name="esimProxyUrl" value="%ESIM_PROXY_URL%" placeholder="http(s)://your-domain.com/esim_proxy.php">
-            <p class="form-hint">填写你部署的 PHP 代理文件完整路径。</p>
-          </div>
-          <button type="submit" class="btn btn-primary btn-sm">保存通信设置</button>
-        </div>
-      </div>
-      </form>
       <div class="card">
         <div class="card-header">📱 eSIM 状态</div>
         <div class="card-body">
@@ -542,6 +521,57 @@ const char* htmlPage = R"rawliteral(
           <div class="result-box" id="esimNotifResult"></div>
         </div>
       </div>
+       <form action="/save" method="POST">
+       <div class="card">
+        <div class="card-header">🚀 云端写卡引擎 (LPA Passthrough)</div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">服务器 IP 及端口 (例如: 198.51.100.1:8080)</label>
+            <div style="display: flex; gap: 8px;">
+              <input class="form-input" type="text" id="lpacTarget" name="esimLpacTarget" value="%ESIM_LPAC_TARGET%" placeholder="在此输入运行 socat 的服务器 IP:PORT">
+              <button type="submit" class="btn btn-primary" style="white-space: nowrap; padding: 6px 18px; font-size: 14px;">💾 保存透传服务器</button>
+            </div>
+          </div>
+          
+          <div>
+            <button type="button" id="btnLpacConnect" class="btn btn-primary" onclick="startLpacPassthrough()" style="padding: 6px 16px; font-size: 13px; font-weight: bold;">1. 建立连接并透传</button>
+            <button type="button" id="btnLpacDisconnect" class="btn btn-danger" onclick="stopLpacPassthrough()" style="margin-left: 12px; padding: 6px 16px; font-size: 13px; font-weight: bold;" disabled>2. 强制断开连接</button>
+          </div>
+          
+          <div class="form-warning" style="margin-top: 12px; margin-bottom: 0; font-size: 14px; line-height: 1.5;">
+          <strong>⚠️ 极其重要：</strong>透传期间云端将独占模组串口。云端操作结束后，请<strong>务必点击“强制断开连接”</strong>释放串口，否则设备的自动保号、短信收发等后台任务将因冲突而彻底瘫痪！
+          </div>
+
+          <div class="form-group" style="margin-top: 15px;">
+            <label class="form-label">📡 实时交互日志 (自动滚动)</label>
+            <textarea id="lpacLogOutput" rows="8" class="form-input" style="font-family: monospace; font-size: 12px; background: #282c34; color: #abb2bf;" readonly></textarea>
+          </div>
+        </div>
+      </div>
+      </form>
+
+
+      <form action="/save" method="POST">
+      <div class="card">
+        <div class="card-header">⚙️ 通知上报通信方式</div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">选择与运营商(RSP)通信的模式</label>
+            <select class="form-select" name="esimProxyMode" id="esimProxyMode" onchange="toggleProxyUrl()">
+              <option value="1" %PROXY_MODE_1%>🌐 使用默认代理 (推荐，公益服务器，如果失败请尝试自建)</option>
+              <option value="2" %PROXY_MODE_2%>🛠️ 用户自建代理 (使用自己的服务器)</option>
+              <option value="0" %PROXY_MODE_0%>⚡ 直接连接 (警告：可能因无 SNI 或证书校验失败)</option>
+            </select>
+          </div>
+          <div class="form-group" id="customProxyGroup" style="display:none;">
+            <label class="form-label">自建代理地址 (Proxy URL)</label>
+            <input class="form-input" type="text" name="esimProxyUrl" value="%ESIM_PROXY_URL%" placeholder="http(s)://your-domain.com/esim_proxy.php">
+            <p class="form-hint">填写你部署的代理完整路径http(s)://your-domain.com/esim_proxy.php。</p>
+          </div>
+          <button type="submit" class="btn btn-primary" style="padding: 10px 24px; font-size: 15px; font-weight: bold;">保存通信设置</button>
+        </div>
+      </div>
+      </form><!-- ===== 通知上报结尾 ===== -->
     </div>
 
     <!-- ===== AT Terminal ===== -->
@@ -727,6 +757,146 @@ const char* htmlPage = R"rawliteral(
     }
 
     // ---- eSIM Management ----
+    //LPA Passthrough 透传模式
+   var lpacLogTimer = null;
+
+    function startLpacPassthrough() {
+      var target = document.getElementById('lpacTarget').value;
+      var parts = target.split(':');
+      if(parts.length !== 2) {
+          alert("请输入正确的 IP:端口 格式！");
+          return;
+      }
+
+      // ==== 【新增】：安全验证弹窗 ====
+      var token = prompt("🔒 保护机制已启动！\n请输入云端服务器的安全 Token：", "");
+      if (token === null || token.trim() === "") {
+          return; // 用户点击取消或未输入，直接退出操作
+      }
+      // =================================
+
+      // 点下后，立刻锁住连接按钮
+      document.getElementById('btnLpacConnect').disabled = true;
+      document.getElementById('lpacLogOutput').value = "正在验证 Token 并唤醒云端隧道...\n";
+
+      // ==== 【新增】：先向云端发送 Token 唤醒隧道 ====
+      // 拼接云端 Web API 地址（IP + 3200端口）
+      var apiUrl = 'http://' + parts[0] + ':3200/api/start_tunnel?token=' + encodeURIComponent(token.trim());
+
+      // 让浏览器直接向云端发请求对暗号
+      fetch(apiUrl)
+        .catch(function(e) {
+          // 忽略浏览器可能产生的跨域(CORS)无害警告，GET 请求实际上已经成功发往服务器
+        })
+        .finally(function() {
+          // 延迟 1 秒钟，确保云端的 socat 进程已经完全启动并开始监听
+          setTimeout(function() {
+            document.getElementById('lpacLogOutput').value += "✅ 唤醒请求已发送！底层设备正在接入隧道...\n";
+            document.getElementById('btnLpacDisconnect').disabled = false;
+            
+            // 1. 触发 ESP32 后端的底层 TCP 连接动作
+            fetch('/esim_passthrough?host=' + parts[0] + '&port=' + parts[1]);
+            
+            // 2. 开启定时器，每 1.5 秒去后端拉一次最新交互日志
+            if (lpacLogTimer) clearInterval(lpacLogTimer);
+            lpacLogTimer = setInterval(fetchLpacLogs, 1500);
+          }, 1000);
+        });
+    }
+
+    function stopLpacPassthrough() {
+      var logEl = document.getElementById('lpacLogOutput');
+      logEl.value += "\n正在发送断开指令...\n";
+      
+      // 【新增】：点击后先把自己锁住，防止疯狂连点
+      document.getElementById('btnLpacDisconnect').disabled = true;
+
+      // 触发后端的强行断开开关
+      fetch('/esim_passthrough_stop')
+        .then(function(response) {
+          // 收到设备后端的确认后，追加“已确认断开”的提示
+          logEl.value += "✅ 已确认断开 (或设备已处于闲置状态)。\n";
+          logEl.scrollTop = logEl.scrollHeight;
+          
+          // 如果定时器还在跑，强行把它停掉，防止重复刷新卡死
+          if (lpacLogTimer) {
+              clearInterval(lpacLogTimer);
+              lpacLogTimer = null;
+          }
+              // 确认断开后，重新解锁“建立连接”按钮
+          document.getElementById('btnLpacConnect').disabled = false;
+        })
+        .catch(function(err) {
+          logEl.value += "❌ 发送断开指令失败\n";
+          document.getElementById('btnLpacDisconnect').disabled = false;
+        });
+    }
+
+        // ==========================================
+        // 【新增黑科技】：监听页面刷新/关闭，自动防卡死 (修正版)
+        // ==========================================
+        window.addEventListener('beforeunload', function (e) {
+          var btnDisconn = document.getElementById('btnLpacDisconnect');
+          // 如果网页关闭或刷新时，断开按钮还是亮着的（说明透传没关）
+          if (btnDisconn && !btnDisconn.disabled) {
+            // 【关键修复】：放弃 sendBeacon(发POST)，改用 fetch + keepalive 强制发送 GET 请求
+            fetch('/esim_passthrough_stop', { keepalive: true });
+          }
+        });
+
+
+    function fetchLpacLogs() {
+      fetch('/esim_passthrough_logs')
+        .then(function(r) { return r.text(); })
+        .then(function(txt) {
+          var el = document.getElementById('lpacLogOutput');
+          var isScrolledToBottom = el.scrollHeight - el.clientHeight <= el.scrollTop + 1;
+          
+          el.value = txt; // 更新日志内容
+          
+          if(isScrolledToBottom) {
+              el.scrollTop = el.scrollHeight;
+          }
+          
+          // ==== 【新增核心】：智能检测 5 分钟超时 ====
+          var isTimeout = txt.indexOf("自动彻底释放透传隧道") !== -1;
+          var isFinished = txt.indexOf("云端任务执行完毕") !== -1 || txt.indexOf("用户手动强制断开") !== -1 || txt.indexOf("连接云端失败") !== -1;
+
+          // 如果检测到彻底断开了（无论是正常结束、报错，还是5分钟超时）
+          if (isTimeout || isFinished) {
+              var btnDisconn = document.getElementById('btnLpacDisconnect');
+              var btnConn = document.getElementById('btnLpacConnect');
+
+              // 【关键黑科技】：如果是云端 5 分钟超时触发的断开，自动通知 ESP32 释放物理串口！
+              if (isTimeout && btnDisconn && !btnDisconn.disabled) {
+                  btnDisconn.disabled = true; // 1. 立刻锁住断开按钮，防止你再去手点
+                  el.value += "\n⏳ 侦测到云端闲置超时，正在自动通知 ESP32 释放物理串口...\n";
+                  el.scrollTop = el.scrollHeight;
+                  
+                  // 2. 自动在后台静默发送释放指令，等同于帮你点了一次“强制断开”
+                  fetch('/esim_passthrough_stop').then(function() {
+                      el.value += "✅ ESP32 串口已自动释放完毕！设备已恢复保号与短信任务。\n";
+                      el.scrollTop = el.scrollHeight;
+                      if(btnConn) btnConn.disabled = false; // 3. 重新解锁“建立连接”按钮
+                  });
+              }
+              
+              // 稳妥地停掉网页的日志拉取定时器
+              if (typeof lpacLogTimer !== 'undefined' && lpacLogTimer) {
+                  clearInterval(lpacLogTimer);
+                  lpacLogTimer = null;
+              }
+              
+              // 针对正常任务结束（非超时）的情况，直接复位按钮
+              if (!isTimeout) {
+                  if(btnConn) btnConn.disabled = false;      
+                  if(btnDisconn) btnDisconn.disabled = true; 
+              }
+          }
+        });
+    }
+
+    
 function esimAction(action){
       var resultEl=null;
       var names={'info':'查询eSIM信息','list':'刷新配置列表','notifcount':'查询通知数量','notifretrieve':'获取待处理通知', 'notifclear':'销毁本地通知', 'notifprocess':'联网上报并清除通知'};
@@ -873,6 +1043,8 @@ function esimAction(action){
                   if(pollData.success) {
                     clearInterval(pollTimer); // 停止轮询
                     esimAction('list');       // 正式渲染新列表
+                    // 自动恢复短信接收能力 (CNMI)，并触发号码刷新逻辑
+                    fetch('/modem?action=init');// 模组重启完毕后，静默触发后端重新初始化！
                   } else if(retries >= 6) {
                     // 如果重试了6次（约21秒）还没好，可能信号很差
                     clearInterval(pollTimer);

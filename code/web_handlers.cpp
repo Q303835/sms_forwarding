@@ -5,6 +5,36 @@
 #include "push.h"
 #include "wifi_config.h"
 #include "esim.h"
+extern bool forceLpacDisconnect;
+extern String lpacLogBuffer;
+
+extern void enterLpacPassthroughMode(const char* host, uint16_t port);// 进入透传模式，直接连接云端写卡引擎
+
+// 接口：强制断开透传
+void handleESimPassthroughStop() {
+    if (!checkAuth()) return;
+    forceLpacDisconnect = true; // 拨动开关，打破 esim.cpp 里的 while 死循环
+    
+    lpacLogBuffer += "🛑 收到断开指令 (设备已进入闲置状态)。\n"; // 让前端和控制台都有反馈
+    logCaptureLn("正在强制清理残留的 eSIM 逻辑通道...");
+    
+    // 关键：稍微等 200 毫秒，让 esim.cpp 里的 while 循环有时间识别到 flag 并彻底退出，避免串口抢占
+    delay(200); 
+    // 盲关 1、2、3 号通道，踢掉被锁死的会话
+    for (int i = 1; i <= 3; i++) {
+        String cmd = "AT+CCHC=" + String(i);
+        sendATCommand(cmd.c_str(), 300); // 盲发指令，每个通道最多等300毫秒
+    }
+    
+    logCaptureLn("✅ 逻辑通道清理完毕，串口控制权已完全归还！");
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
+// 接口：给网页喂最新的日志
+void handleESimPassthroughLogs() {
+    if (!checkAuth()) return;
+    server.send(200, "text/plain", lpacLogBuffer);
+}
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -109,6 +139,28 @@ static void appendPushTypeOptions(String& html, PushType current) {
 
 static bool isValidPushType(int typeVal) {
   return typeVal >= PUSH_TYPE_POST_JSON && typeVal <= PUSH_TYPE_TELEGRAM;
+}
+// 处理 eSIM 透传模式请求
+
+void handleESimPassthrough() {
+    if (!checkAuth()) return;
+    
+    String host = server.arg("host");
+    int port = server.arg("port").toInt();
+
+    if (host.length() == 0 || port == 0) {
+        server.send(400, "application/json", "{\"success\":false,\"message\":\"IP或端口无效\"}");
+        return;
+    }
+
+    // 💡 骚操作：在进入死循环透传前，先给浏览器回复 HTTP 200，防止浏览器一直转圈报错
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"指令已下达，系统进入透传模式，请查看控制台日志！\"}");
+    
+    // 稍微等 100ms，让 HTTP 报文飞出 ESP32 的网卡
+    delay(100);
+
+    // 正式进入透传死循环 (此时网页会挂起，直到透传结束)
+    enterLpacPassthroughMode(host.c_str(), port);
 }
 
 // 处理配置页面请求 (终极分块传输版，彻底解决内存碎片)
@@ -247,6 +299,7 @@ void handleRoot() {
   htmlPart2.replace("%AUTO_SMS_TARGET_NUMBER%", String(config.autoSms.targetNumber));
   htmlPart2.replace("%AUTO_SMS_MESSAGE%", String(config.autoSms.message));
   htmlPart2.replace("%AUTO_SMS_INTERVAL_DAYS%", String(config.autoSms.intervalDays));
+  
   // 将 Unix 时间戳转换为 YYYY-MM-DD 格式展示给前端
   String lastDateStr = "";
   if (config.autoSms.lastSentTime > 0) {
@@ -257,8 +310,13 @@ void handleRoot() {
       lastDateStr = String(buf);
   }
   htmlPart2.replace("%AUTO_SMS_LAST_SENT_DATE%", lastDateStr);
-  server.sendContent(htmlPart2);
   
+  htmlPart2.replace("%PROXY_MODE_0%", config.esimProxyMode == 0 ? "selected" : "");
+  htmlPart2.replace("%PROXY_MODE_1%", config.esimProxyMode == 1 ? "selected" : "");
+  htmlPart2.replace("%PROXY_MODE_2%", config.esimProxyMode == 2 ? "selected" : "");
+  htmlPart2.replace("%ESIM_PROXY_URL%", config.esimProxyUrl);
+  htmlPart2.replace("%ESIM_LPAC_TARGET%", config.esimLpacTarget);
+  server.sendContent(htmlPart2);
   // 发送结束标志，通知浏览器页面加载完毕
   server.sendContent("");
 }
@@ -965,6 +1023,7 @@ void handleSave() {
   //==========用户自建esim通讯服务器===========
   if (server.hasArg("esimProxyMode")) { config.esimProxyMode = server.arg("esimProxyMode").toInt(); }
   if (server.hasArg("esimProxyUrl")) { config.esimProxyUrl = server.arg("esimProxyUrl"); }
+  if (server.hasArg("esimLpacTarget")) {config.esimLpacTarget = server.arg("esimLpacTarget");}
   // ============ 【WiFi 独立表单参数拦截】 ============
   bool hasNewWifi = false;
   if (server.hasArg("wifiSsid") && server.arg("wifiSsid").length() > 0) {

@@ -108,9 +108,8 @@ void setup() {
   delay(200);
   Serial1.begin(115200, SERIAL_8N1, RXD, TXD);
   Serial1.setRxBufferSize(SERIAL_BUFFER_SIZE);
-  while (Serial1.available()) Serial1.read();
-  modemPowerCycle();
-  while (Serial1.available()) Serial1.read();
+  while (Serial1.available()) Serial1.read();//清除开机串口乱码
+
   initConcatBuffer();
   loadConfig();
   configValid = isConfigValid();
@@ -160,6 +159,10 @@ void setup() {
     logCaptureLn(String("请用手机连接 WiFi [ESP32C3_SETUP]，然后访问 192.168.4.1 打开后台配网！"));
   }
 
+
+  server.on("/esim_passthrough_stop", HTTP_GET, handleESimPassthroughStop);
+  server.on("/esim_passthrough_logs", HTTP_GET, handleESimPassthroughLogs);
+  server.on("/esim_passthrough", HTTP_GET, handleESimPassthrough);
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/tools", handleRoot);
@@ -176,7 +179,8 @@ void setup() {
   server.on("/api/set_autosms", HTTP_POST, handleSetAutoSms);
   server.begin();
   logCaptureLn(String("HTTP服务器已启动"));
-
+  modemPowerCycle();                          // 1. 让模组在后台执行 7.2 秒的软重启
+  while (Serial1.available()) Serial1.read(); // 2. 清理模组吐出的乱码
   // 1. 优先初始化 4G 模组，让它在后台开始注网、分配 IP
   logCaptureLn(String("正在初始化模组并等待网络稳定..."));
   modemInit(); 
@@ -196,23 +200,26 @@ void setup() {
   // 获取手机号
   refreshLocalPhoneNumber();
   
-  // 2. 给模组 5-8 秒的注网和获取 IP 的缓冲时间
-  for (int i = 0; i < 8; i++) {
-    server.handleClient(); // 保持网页能正常访问
-    delay(1000);
+  // ==========================================
+  // 【核心优化 1】：极速响应的注网等待
+  // ==========================================
+  unsigned long waitStart = millis();
+  while (millis() - waitStart < 8000) { // 总计等待 8 秒
+    server.handleClient(); // 高频处理网页请求，拒绝卡顿！
+    delay(10);             // 仅休眠 10ms，让出 CPU 切片
   }
 
   // 3. 此时模组网络基本已经通了，再调用你原本的 NTP 同步
   logCaptureLn(String("正在同步NTP时间..."));
-  // 注入国内的高速 NTP 服务器
   configTime(8 * 3600, 0, "ntp.aliyun.com", "ntp.ntsc.ac.cn", "pool.ntp.org"); 
   
-  int ntpRetry = 0;
-  // 通过 time(nullptr) 是否大于 100000 来判断网络时间是否真的同步成功
-  while (time(nullptr) < 100000 && ntpRetry < 15) { 
-    server.handleClient();
-    delay(1000);
-    ntpRetry++;
+  // ==========================================
+  // 【核心优化 2】：极速响应的 NTP 同步等待
+  // ==========================================
+  unsigned long ntpStart = millis();
+  while (time(nullptr) < 100000 && (millis() - ntpStart < 15000)) { // 最多等 15 秒
+    server.handleClient(); // 保持网页如丝般顺滑
+    delay(10);
   }
 
   if (time(nullptr) >= 100000) {

@@ -3,8 +3,11 @@
 #include "web_handlers.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <WiFiClient.h>
+#include <WebServer.h>
 #include "mbedtls/base64.h"
 #include <ctype.h>
+
 
 #if ESIM_PROFILE_LOG
 #define ESIM_PROFILE_LOG_LN(expr) logCaptureLn(expr)
@@ -12,6 +15,10 @@
 #define ESIM_PROFILE_LOG_LN(expr) do {} while (0)
 #endif
 
+extern WebServer server; // 引入全局 Web 服务器，用于“插管”
+
+bool forceLpacDisconnect = false; // 强行断开的开关
+String lpacLogBuffer = "";        // 网页实时日志池
 static const uint8_t ESIM_ISD_R_AID[] = {
   0xA0, 0x00, 0x00, 0x05, 0x59, 0x10, 0x10, 0xFF,
   0xFF, 0xFF, 0xFF, 0x89, 0x00, 0x00, 0x01, 0x00
@@ -240,6 +247,7 @@ static void appendTlv(uint8_t* out, size_t* pos, uint32_t tag, const uint8_t* va
   }
 }
 
+//eSIM 查询
 static String sendESimATCommand(const char* cmd, unsigned long timeout) {
   while (Serial1.available()) Serial1.read();
   Serial1.println(cmd);
@@ -249,6 +257,7 @@ static String sendESimATCommand(const char* cmd, unsigned long timeout) {
   bool sawFinal = false;
   String resp = "";
   resp.reserve(2048);
+  
   while (millis() - start < timeout) {
     bool gotByte = false;
     while (Serial1.available()) {
@@ -261,11 +270,13 @@ static String sendESimATCommand(const char* cmd, unsigned long timeout) {
     if (gotByte) {
       String tail = resp;
       tail.trim();
+      // 检查是否收到了完整的结束标志
       sawFinal = tail.endsWith("OK") || tail.endsWith("ERROR") ||
                  tail.indexOf("+CME ERROR:") >= 0 || tail.indexOf("+CMS ERROR:") >= 0;
     }
-
-    if (sawFinal && millis() - lastByteAt >= 300) {
+    //优化esp32查询esim配置响应速度
+    // 只要看到了 OK 或 ERROR，并且后续 15ms 内没有新数据吐出，立刻返回！
+    if (sawFinal && millis() - lastByteAt >= 15) {
       return resp;
     }
     delay(1);
@@ -1322,7 +1333,7 @@ bool esimProcessNotifications(String& outputLog) {
         // 根据用户的模式选择，动态分配 URL 和 Header
         if (config.esimProxyMode == 1) {
             useProxy = true;
-            url = "http://esim-proxy.lxyk.de/esim_proxy.php"; 
+            url = "http://esim-proxy.lxyk.de/esim_proxy"; 
             logCaptureLn("🌐 正在使用默认代理服务器上报...");
         } 
         else if (config.esimProxyMode == 2) {
@@ -1432,6 +1443,132 @@ bool esimProcessNotifications(String& outputLog) {
   return true;
 }
 
+// 进入透传模式，直接连接云端写卡引擎
+void enterLpacPassthroughMode(const char* host, uint16_t port) {
+    WiFiClient client;
+    forceLpacDisconnect = false;
+    lpacLogBuffer = "🚀 正在连接云端写卡引擎: " + String(host) + ":" + String(port) + "\n";
+
+    if (client.connect(host, port)) {
+        lpacLogBuffer += "✅ 连接成功！已进入透传模式。\n";
+
+        // 向云端 Web 平台发送“我就绪了”的信号
+        WiFiClient normalClient;
+        HTTPClient http;
+        String readyUrl = "http://" + String(host) + ":3200/api/device_ready";
+        
+        http.setTimeout(5000); 
+        if (http.begin(normalClient, readyUrl)) {
+            int httpCode = http.GET();
+            if (httpCode == 200) {
+                lpacLogBuffer += "🔗 已成功唤醒云端 Web 平台，控制台按钮已解锁！\n";
+            } else {
+                lpacLogBuffer += "⚠️ 唤醒 Web 平台失败 (HTTP " + String(httpCode) + ")。\n";
+            }
+            http.end();
+        } else {
+            lpacLogBuffer += "⚠️ 无法连接到云端 API，唤醒请求失败。\n";
+        }
+        
+        lpacLogBuffer += "⏳ 准备就绪，请在云端下发查询或写卡指令...\n";
+
+        // ==========================================
+        // 【新增防御机制】：记录最后活动时间
+        // ==========================================
+        unsigned long lastActiveTime = millis();
+
+        // 核心透传循环
+        while (client.connected() && !forceLpacDisconnect) {
+            
+            // 让网页服务器“呼吸”，允许处理后续的 HTTP 请求
+            server.handleClient(); 
+
+            // 1. 网络 -> 串口
+            if (client.available()) {
+                lastActiveTime = millis(); // 更新活跃时间
+                size_t len = client.available();
+                uint8_t buf[256];
+                if (len > sizeof(buf)) len = sizeof(buf);
+                client.read(buf, len);
+                Serial1.write(buf, len);
+                
+                lpacLogBuffer += "[云端服务器 -> 本地模组] 发送了 " + String(len) + " 字节指令...\n";
+            }
+
+            // 2. 串口 -> 网络
+            if (Serial1.available()) {
+                lastActiveTime = millis(); // 更新活跃时间
+                
+                // 【重大修复】：废弃阻塞 1 秒的 readString()，改用 15ms 毫秒级高速微循环读取！
+                // 这能让读写速度翻倍，且绝对不会卡死系统！
+                String resp = "";
+                unsigned long lastCharTime = millis();
+                while (millis() - lastCharTime < 15) {
+                    while (Serial1.available()) {
+                        resp += (char)Serial1.read();
+                        lastCharTime = millis();
+                    }
+                    delay(1);
+                }
+
+                // 智能拦截补全 (专治 SIMCom 模组)
+                resp.replace("\r\n1\r\n", "\r\n+CCHO: 1\r\n");
+                resp.replace("\r\n2\r\n", "\r\n+CCHO: 2\r\n");
+                resp.replace("\r\n3\r\n", "\r\n+CCHO: 3\r\n");
+
+                client.print(resp);
+                lpacLogBuffer += "[本地模组 -> 云端服务器] 响应了 " + String(resp.length()) + " 字节数据...\n";
+            }
+
+
+            // 3. 【终极防线】：ESP32 侧的 5 分钟超时强踢机制
+            if (millis() - lastActiveTime > 300000) {
+                lpacLogBuffer += "\n⏳ [硬件保护] ESP32 连续 5 分钟未收到任何数据！\n";
+                // 【绝妙配合】：这里的字眼会精准触发你之前在前端写的 isTimeout 检测逻辑！
+                lpacLogBuffer += "自动彻底释放透传隧道，归还串口！\n"; 
+                break; 
+            }
+
+            // 防爆内存机制：日志超过 3000 字就切掉旧的，保留最新的
+            if (lpacLogBuffer.length() > 3000) {
+                lpacLogBuffer = lpacLogBuffer.substring(lpacLogBuffer.length() - 2000);
+            }
+
+            delay(2); 
+        }
+
+        // ==========================================
+        // 退出循环与清理
+        // ==========================================
+        if (forceLpacDisconnect) {
+            lpacLogBuffer += "\n🛑 用户手动强制断开了连接。\n";
+        } else if (millis() - lastActiveTime > 300000) {
+            lpacLogBuffer += "✅ 闲置超时，连接已自动安全释放。\n";
+        } else {
+            lpacLogBuffer += "\n❌ 云端任务执行完毕或网络已断开。\n";
+        }
+        client.stop(); // 掐断隧道代码
+
+        // ==========================================
+        // 通知云端平台设备已断开，锁定控制台
+        // ==========================================
+        HTTPClient httpDisconnect;
+        httpDisconnect.setTimeout(3000); // 最多等3秒
+        
+        String disconnectUrl = "http://" + String(host) + ":3200/api/device_disconnect"; 
+        
+        if (httpDisconnect.begin(normalClient, disconnectUrl)) {
+            if (httpDisconnect.GET() == 200) {
+                lpacLogBuffer += "🔒 已成功通知云端 Web 平台锁定控制台。\n";
+            }
+            httpDisconnect.end();
+        }
+    } else {
+        lpacLogBuffer += "❌ 连接云端失败，请检查 IP、端口和服务器防火墙。\n";
+    }
+}
+
+//esim改名
 bool esimSetNickname(const char* iccidOrAid, const char* nickname) {
   if (!nickname) {
     setError("昵称不能为空");

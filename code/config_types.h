@@ -53,7 +53,8 @@ struct Config {
   String webPass;      // Web管理密码
   String numberBlackList;  // 号码黑名单（换行符分隔）
   int esimProxyMode;   // 【新增】0=直连, 1=默认, 2=自建
-  String esimProxyUrl; // 【新增】自建的URL地址
+  String esimProxyUrl; // 【新增】自建的上报运营商URL地址
+  String esimLpacTarget; // 【新增】自建的LPAC目标地址
   AutoSMSConfig autoSms;
 };
 

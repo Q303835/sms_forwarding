@@ -29,5 +29,7 @@ void handleModem();
 void handleWifi();
 void handleESim();
 void handleSetAutoSms();
-
+void handleESimPassthrough();// 处理进入透传模式的请求
+void handleESimPassthroughStop();// 处理退出透传模式的请求
+void handleESimPassthroughLogs();// 处理获取透传模式日志的请求
 #endif

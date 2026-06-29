@@ -17,6 +17,7 @@ void saveConfig() {
   preferences.putString("wifiPass", config.wifiPass);
   preferences.putInt("esimProxyMode", config.esimProxyMode);
   preferences.putString("esimProxyUrl", config.esimProxyUrl);
+  preferences.putString("esimLpacTarget", config.esimLpacTarget);
   // 保存自动保号配置 (键名严格限制在15字符以内)
   preferences.putBool("as_en", config.autoSms.enabled);
   preferences.putUInt("as_time", config.autoSms.lastSentTime);
@@ -57,6 +58,7 @@ void loadConfig() {
   config.wifiPass = preferences.getString("wifiPass", "");
   config.esimProxyMode = preferences.getInt("esimProxyMode", 1); 
   config.esimProxyUrl = preferences.getString("esimProxyUrl", "");
+  config.esimLpacTarget = preferences.getString("esimLpacTarget", "");
   // 加载推送通道配置
   // 读取自动保号配置，逗号后面的是默认值（如果找不到数据就用默认值）
     config.autoSms.enabled = preferences.getBool("as_en", false);
