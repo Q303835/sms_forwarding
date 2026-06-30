@@ -38,6 +38,6 @@ extern bool modemReady;
 extern unsigned long lastPrintTime;
 extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];
 extern String localPhoneNumber;
-void refreshLocalPhoneNumber();
+void refreshLocalPhoneNumber();// 读取本机号码
 
 #endif

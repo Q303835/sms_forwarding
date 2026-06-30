@@ -197,8 +197,7 @@ void setup() {
   } else {
     logCaptureLn(String("eSIM初始化失败或未检测到eUICC芯片"));
   }
-  // 获取手机号
-  refreshLocalPhoneNumber();
+  
   
   // ==========================================
   // 【核心优化 1】：极速响应的注网等待
@@ -221,7 +220,9 @@ void setup() {
     server.handleClient(); // 保持网页如丝般顺滑
     delay(10);
   }
-
+  
+  // 获取手机号
+  refreshLocalPhoneNumber();
   if (time(nullptr) >= 100000) {
     timeSynced = true;
     logCaptureLn(String("NTP时间同步成功！"));

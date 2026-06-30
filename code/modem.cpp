@@ -102,29 +102,60 @@ void modemInit() {
   }
 
   if(need_set_CGACT) {
+    int cgactRetry = 0;
     while (!sendATandWaitOK("AT+CGACT=0,1", 5000)) {
       logCaptureLn(String("设置CGACT失败，重试..."));
       blink_short();
+      cgactRetry++;
+      if (cgactRetry >= 5) {
+        logCaptureLn(String("⚠️ 多次重试CGACT失败(可能未插卡)，跳过"));
+        break;
+      }
     }
-    logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
+    if (cgactRetry < 5) {
+      logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
+    }
   } else {
     logCaptureLn(String("该型号无法配置(AT+CGACT=0,1)，跳过该命令，会不会消耗流量？自求多福"));
   }
+
+  int cnmiRetry = 0;
   while (!sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000)) {
     logCaptureLn(String("设置CNMI失败，重试..."));
     blink_short();
+    cnmiRetry++;
+    if (cnmiRetry >= 5) {
+      logCaptureLn(String("⚠️ 设置CNMI超时，跳过"));
+      break;
+    }
   }
-  logCaptureLn(String("CNMI参数设置完成"));
+  if (cnmiRetry < 5) {
+    logCaptureLn(String("CNMI参数设置完成"));
+  }
+
+  int cmgfRetry = 0;
   while (!sendATandWaitOK("AT+CMGF=0", 1000)) {
     logCaptureLn(String("设置PDU模式失败，重试..."));
     blink_short();
+    cmgfRetry++;
+    if (cmgfRetry >= 5) {
+      logCaptureLn(String("⚠️ 设置PDU模式超时，跳过"));
+      break;
+    }
   }
-  logCaptureLn(String("PDU模式设置完成"));
+  if (cmgfRetry < 5) {
+    logCaptureLn(String("PDU模式设置完成"));
+  }
+
   int ceregRetry = 0;
   while (!waitCEREG() && ceregRetry < 30) {
     logCaptureLn(String("等待网络注册..."));
     ceregRetry++;
     blink_short();
+  }
+  // 给最后一步加个超时提示，方便看日志
+  if (ceregRetry >= 30) {
+    logCaptureLn(String("⚠️ 网络注册超时，可能未插卡或无信号"));
   }
 if (ceregRetry < 30) {
     logCaptureLn(String("网络已注册"));
@@ -214,7 +245,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   // 等待 > 提示符
   unsigned long start = millis();
   bool gotPrompt = false;
-  while (millis() - start < 5000) {
+  while (millis() - start < 10000) {
     if (Serial1.available()) {
       char c = Serial1.read();
       logCapture(String(c));
@@ -238,7 +269,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   // 等待响应
   start = millis();
   String resp = "";
-  while (millis() - start < 30000) {
+  while (millis() - start < 40000) {
     while (Serial1.available()) {
       char c = Serial1.read();
       resp += c;

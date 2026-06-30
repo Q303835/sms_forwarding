@@ -64,9 +64,6 @@ String urlEncode(const String& str) {
   return encoded;
 }
 
-// 钉钉签名函数（时间戳为UTC毫秒级）
-
-
 // 获取当前UTC毫秒级时间戳（用于钉钉签名）
 int64_t getUtcMillis() {
   struct timeval tv;

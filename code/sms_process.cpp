@@ -402,6 +402,7 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   sendEmailNotification(subject.c_str(), body.c_str());
 }
 
+// 处理PDU行的辅助函数
 static void handlePduLine(const String& line) {
   logCaptureLn(String("收到PDU数据: " + line));
   logCaptureLn(String("PDU长度: " + String(line.length()) + " 字符"));

@@ -231,6 +231,9 @@ void handleRoot() {
   htmlPart1.replace("%WIFI_SSID%", String(WiFi.SSID()));
   htmlPart1.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
   htmlPart1.replace("%UPTIME%", String(uptimeBuf));
+  // 读取温度并替换占位符
+  float current_temp = temperatureRead();
+  htmlPart1.replace("%ESP_TEMP%", String(current_temp, 1) + " &deg;C");
   htmlPart1.replace("%WEB_USER%", config.webUser);
   htmlPart1.replace("%WEB_PASS%", config.webPass);
   htmlPart1.replace("%SMTP_SERVER%", config.smtpServer);

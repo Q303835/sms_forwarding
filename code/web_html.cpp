@@ -229,6 +229,7 @@ const char* htmlPage = R"rawliteral(
             <div class="overview-item"><div class="label">WiFi SSID</div><div class="value" id="ovSsid">%WIFI_SSID%</div></div>
             <div class="overview-item"><div class="label">Free Heap</div><div class="value" id="ovHeap">%FREE_HEAP%</div></div>
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>
+            <div class="overview-item"><div class="label">Core Temp</div><div class="value" id="ovTemp" style="color:#e53935;">%ESP_TEMP%</div></div>
           </div>
         </div>
       </div>
