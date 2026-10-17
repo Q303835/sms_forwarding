@@ -101,7 +101,6 @@ void checkConcatTimeout() {
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     if (concatBuffer[i].inUse) {
       // ============ 【核心修复】：强行将超时等待设定为 30000 毫秒（30秒）============
-      // 防止因为宏定义错误（如错填成30）导致的瞬间超时
       if (now - concatBuffer[i].firstPartTime >= 30000UL) {
         logCaptureLn(String("⏰ 长短信超时，强制转发不完整消息"));
         logCaptureF("  参考号: %d, 已收到: %d/%d\n", 
