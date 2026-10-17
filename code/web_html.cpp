@@ -217,7 +217,7 @@ const char* htmlPage = R"rawliteral(
 
   <main class="main">
 
-<!-- ===== Overview ===== -->
+    <!-- ===== Overview ===== -->
     <div class="panel active" id="panel-overview">
       <h1 class="page-title">系统概览</h1>
       <p class="page-subtitle">设备状态与基本信息</p>
@@ -233,7 +233,6 @@ const char* htmlPage = R"rawliteral(
           </div>
         </div>
       </div>
-      
       <div class="card">
         <div class="card-header">⚙ 配置状态</div>
         <div class="card-body">
@@ -245,29 +244,6 @@ const char* htmlPage = R"rawliteral(
           </table>
         </div>
       </div>
-
-      <!-- ========================================== -->
-      <!-- 💡 【核心新增】将备用号码设置做成一个独立卡片放在最底下 -->
-      <!-- ========================================== -->
-      <div class="card">
-        <div class="card-header">📱 备用号码设置</div>
-        <div class="card-body">
-          <form action="/save" method="POST">
-            <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label" style="font-weight: bold; color: #333;">备用本机号码 (当 SIM 卡无号码时生效)</label>
-              <div style="display: flex; gap: 10px; margin-top: 10px;">
-                <input class="form-input" type="text" name="manualPhone" value="%MANUAL_PHONE%" placeholder="例如: +8613800000000" style="flex: 1; min-width: 200px;">
-                <button type="submit" class="btn btn-primary" style="white-space: nowrap; padding: 0 20px; font-weight: bold;">💾 保存设置</button>
-              </div>
-              <div class="form-hint" style="margin-top: 12px; font-size: 13px; color: #666; line-height: 1.5;">
-                仅用于纯流量卡或无号码烧录的物联网卡。若填写此项，系统在读不出底层卡号时，将以该号码作为短信推送的发件人标识。
-              </div>
-            </div>
-          </form>
-        </div>
-      </div>
-      <!-- ========================================== -->
-
     </div>
 
     <!-- ===== Account ===== -->

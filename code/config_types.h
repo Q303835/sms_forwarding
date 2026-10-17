@@ -56,7 +56,6 @@ struct Config {
   String esimProxyUrl; // 【新增】自建的上报运营商URL地址
   String esimLpacTarget; // 【新增】自建的LPAC目标地址
   AutoSMSConfig autoSms;
-  String manualPhone;  // 【新增】备用号码（网页端可手动输入）
 };
 
 

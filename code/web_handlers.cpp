@@ -233,7 +233,6 @@ void handleRoot() {
   htmlPart1.replace("%UPTIME%", String(uptimeBuf));
   // 读取温度并替换占位符
   float current_temp = temperatureRead();
-  htmlPart1.replace("%MANUAL_PHONE%", config.manualPhone); // 【核心新增】将内存中的备用号码填入输入框
   htmlPart1.replace("%ESP_TEMP%", String(current_temp, 1) + " &deg;C");
   htmlPart1.replace("%WEB_USER%", config.webUser);
   htmlPart1.replace("%WEB_PASS%", config.webPass);
@@ -297,7 +296,6 @@ void handleRoot() {
   // --- 第三部分：复制并发送占位符【之后】的 HTML ---
   String htmlPart2 = String(markerPtr + strlen(pushMarker));
   htmlPart2.replace("%ADMIN_PHONE%", config.adminPhone);
-
   htmlPart2.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
   htmlPart2.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
   htmlPart2.replace("%AUTO_SMS_ENABLED_CHECKED%", config.autoSms.enabled ? "checked" : "");
@@ -786,65 +784,50 @@ void handleSendSms() {
   phone.trim();
   content.trim();
   
-  if (phone.length() == 0 || content.length() == 0) {
-    // 处理空输入，直接返回完整错误页面
-    String errHtml = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta http-equiv=\"refresh\" content=\"3;url=/sms\"><title>错误</title><style>body{font-family:Arial,sans-serif;text-align:center;padding-top:100px;background:#f5f5f5;} .error{padding:20px;border-radius:10px;display:inline-block;background:#f44336;color:white;}</style></head><body><div class=\"error\"><h2>❌ 错误：号码或内容不能为空</h2><p>3秒后返回...</p></div></body></html>";
-    server.send(200, "text/html", errHtml);
-    return;
-  }
-
-  logCaptureLn(String("网页端发送短信请求"));
-  logCaptureLn(String("目标号码: " + phone));
-  logCaptureLn(String("短信内容: " + content));
-
-  // 1. 分段发送内容（未知长度）
-  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server.send(200, "text/html", "");
-
-  // 2. 立刻发送“上半部分”网页（黄色的等待界面）
-  String htmlStart = R"rawliteral(
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <meta charset="UTF-8">
-    <title>发送中...</title>
-    <style>
-      body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; transition: background 0.5s; }
-      #status-box { padding: 20px; border-radius: 10px; display: inline-block; background: #FF9800; color: white; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-    </style>
-  </head>
-  <body>
-    <div id="status-box">
-      <h2 id="status-icon">⏳ 正在发送中...</h2>
-      <p id="status-msg">如使用海外漫游卡，发送可能需要 30-40 秒。请自行返回</p>
-    </div>
-  )rawliteral";
-  server.sendContent(htmlStart); 
-
-  // 3. 开始执行耗时的发短信操作
-  bool success = sendSMS(phone.c_str(), content.c_str());
-  String resultMsg = success ? "短信发送成功！" : "短信发送失败，请检查模组状态";
-  String bgColor = success ? "#4CAF50" : "#f44336"; // 成功变绿，失败变红
-  String icon = success ? "✅" : "❌";
-
-  // 4. 短信发完了，发送“下半部分”网页（用 JS 动态修改页面内容）
-  String htmlEnd = String(R"rawliteral(
-    <script>
-      // 短信发送完毕，修改网页内容为最终结果
-      var box = document.getElementById('status-box');
-      box.style.background = ')rawliteral") + bgColor + R"rawliteral(';
-      document.getElementById('status-icon').innerHTML = ')rawliteral" + icon + " " + resultMsg + R"rawliteral(';
-      document.getElementById('status-msg').innerHTML = '3秒后自动返回发送页面...';
-      
-      // 3秒后跳转回主页
-      setTimeout(function() { window.location.href = '/sms'; }, 3000);
-    </script>
-  </body>
-  </html>
-  )rawliteral";
+  bool success = false;
+  String resultMsg = "";
   
-  server.sendContent(htmlEnd); // 发送收尾的 HTML
-  server.sendContent("");      // 发送一个空字符串，告诉浏览器分段传输结束
+  if (phone.length() == 0) {
+    resultMsg = "错误：请输入目标号码";
+  } else if (content.length() == 0) {
+    resultMsg = "错误：请输入短信内容";
+  } else {
+    logCaptureLn(String("网页端发送短信请求"));
+    logCaptureLn(String("目标号码: " + phone));
+    logCaptureLn(String("短信内容: " + content));
+    
+    success = sendSMS(phone.c_str(), content.c_str());
+    resultMsg = success ? "短信发送成功！" : "短信发送失败，请检查模组状态";
+  }
+  
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="3;url=/sms">
+  <title>发送结果</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; }
+    .result { padding: 20px; border-radius: 10px; display: inline-block; }
+    .success { background: #4CAF50; color: white; }
+    .error { background: #f44336; color: white; }
+  </style>
+</head>
+<body>
+  <div class="result %CLASS%">
+    <h2>%ICON% %MSG%</h2>
+    <p>3秒后返回发送页面...</p>
+  </div>
+</body>
+</html>
+)rawliteral";
+  
+  html.replace("%CLASS%", success ? "success" : "error");
+  html.replace("%ICON%", success ? "✅" : "❌");
+  html.replace("%MSG%", resultMsg);
+  
+  server.send(200, "text/html", html);
 }
 
 // 处理Ping请求
@@ -1064,8 +1047,7 @@ void handleSave() {
   // 3. 管理员 & 黑名单表单更新
   if (server.hasArg("adminPhone")) { config.adminPhone = server.arg("adminPhone"); }
   if (server.hasArg("numberBlackList")) { config.numberBlackList = server.arg("numberBlackList"); }
-// 【新增】接收网页传来的备用号码
-  if (server.hasArg("manualPhone")) { config.manualPhone = server.arg("manualPhone"); }
+
   // 4. 推送通道配置循环更新
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String idx = String(i);
@@ -1134,10 +1116,6 @@ void handleSave() {
   // 🔑 关键修复点：无论哪种保存，都必须先把构建好的 html 发送给浏览器回包！
   server.send(200, "text/html", html);
   
-  // 【核心修复】：在发邮件之前，强制让系统重新读取并更新内存中的全局号码！
-  extern void refreshLocalPhoneNumber();
-  refreshLocalPhoneNumber();
-
   // 6. 如果配置有效，异步发送开机邮件通知
   if (configValid) {
     logCaptureLn(String("配置有效，发送启动通知..."));
