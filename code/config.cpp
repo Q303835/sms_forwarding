@@ -22,7 +22,9 @@ void saveConfig() {
   preferences.putBool("as_en", config.autoSms.enabled);
   preferences.putUInt("as_time", config.autoSms.lastSentTime);
   preferences.putUShort("as_days", config.autoSms.intervalDays);
-  
+
+  preferences.putString("manualPhone", config.manualPhone);
+
   // 因为你在结构体里定义的是 char 数组，保存时要转成 String
   preferences.putString("as_tgt", String(config.autoSms.targetNumber));
   preferences.putString("as_msg", String(config.autoSms.message));
@@ -59,6 +61,7 @@ void loadConfig() {
   config.esimProxyMode = preferences.getInt("esimProxyMode", 1); 
   config.esimProxyUrl = preferences.getString("esimProxyUrl", "");
   config.esimLpacTarget = preferences.getString("esimLpacTarget", "");
+  config.manualPhone = preferences.getString("manualPhone", "");
   // 加载推送通道配置
   // 读取自动保号配置，逗号后面的是默认值（如果找不到数据就用默认值）
     config.autoSms.enabled = preferences.getBool("as_en", false);

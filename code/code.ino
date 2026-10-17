@@ -12,24 +12,36 @@
 #include "esim.h"
 
 // 重新获取本机号码的全局函数
+// 重新获取本机号码的全局函数 (带人工设置兜底逻辑)
 void refreshLocalPhoneNumber() {
   logCaptureLn(String("正在从SIM卡读取本机号码..."));
   String cnumResp = sendATCommand("AT+CNUM", 1500);
+  
+  String simNumber = ""; // 临时存放从卡里读出的号码
   int firstQuote = cnumResp.indexOf("\",\"");
   if (firstQuote != -1) {
     int secondQuote = cnumResp.indexOf("\"", firstQuote + 3);
     if (secondQuote != -1) {
-      localPhoneNumber = cnumResp.substring(firstQuote + 3, secondQuote);
+      simNumber = cnumResp.substring(firstQuote + 3, secondQuote);
     }
   }
-  localPhoneNumber.replace("NonNull", "");
-  localPhoneNumber.trim();
+  simNumber.replace("NonNull", "");
+  simNumber.trim();
   
-  if (localPhoneNumber.length() > 0 && localPhoneNumber != "未知号码") {
-    logCaptureLn(String("✓ 成功更新本机号码: ") + localPhoneNumber);
+  // 核心判断逻辑：卡里有没有号码？
+  if (simNumber.length() > 0 && simNumber != "未知号码") {
+    localPhoneNumber = simNumber;
+    logCaptureLn(String("✓ 成功从SIM卡读取本机号码: ") + localPhoneNumber);
   } else {
-    localPhoneNumber = "未知号码";
-    logCaptureLn(String("⚠️ SIM卡内未写入号码"));
+    // 卡里读不到，开始尝试使用人工设置的备用号码
+    // 假设你在 config 结构体里加了一个 manualPhone 字段 (String 类型)
+    if (config.manualPhone.length() > 0) {
+      localPhoneNumber = config.manualPhone;
+      logCaptureLn(String("⚠️ SIM卡未自带号码，已使用人工配置的号码: ") + localPhoneNumber);
+    } else {
+      localPhoneNumber = "未知号码";
+      logCaptureLn(String("⚠️ SIM卡未自带号码，且未设置人工号码"));
+    }
   }
 }
 // ================= 自动保号后台检查任务 =================
